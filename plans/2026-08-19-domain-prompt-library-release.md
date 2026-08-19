@@ -1,7 +1,7 @@
 ---
 artifact_kind: plan
-status: in-progress
-knowledge_outcome: null
+status: complete
+knowledge_outcome: none
 candidate_ids: []
 affected_canon:
   - .gitattributes
@@ -82,7 +82,7 @@ Deliverable: manifest и release metadata `1.6.2`.
 - [x] distribution descriptor строится из exact tag в harness;
 - [x] настоящий Git commit/clone сохраняет обязательные run roots и descriptor hashes.
 
-## Фаза 3 - [ ] Проверка и публикация
+## Фаза 3 - [x] Проверка и публикация
 
 Цель: выпустить source и derived consumer без ручного drift.
 
@@ -91,7 +91,7 @@ Deliverable: зеленые gates, source tag, consumer commit и GitHub refs.
 Сделано, когда:
 
 - [x] local release checks зелены;
-- [ ] remote refs проверены после push.
+- [x] remote refs проверены после push.
 
 ## Проверки
 
@@ -108,9 +108,10 @@ Deliverable: зеленые gates, source tag, consumer commit и GitHub refs.
 
 ## Итог
 
-- Реализовано целиком: библиотека и portable contract.
-- Что осталось: чистый public source commit/tag `v1.6.2`, actual consumer build, atomic push и remote verification.
-- Коммиты: нет.
+- Реализовано целиком: библиотека, portable contract, обезличенная public history и GitHub publication.
+- Что осталось: обязательных действий нет; признак GitHub `Template repository` включается отдельно в настройках repository.
+- Public source/tag commit: `c8639f22f0517ca7b6dbba5d96b1ff3ef5c8e326`.
+- Public consumer `main` commit: `31927e05f5f94442c3ddf3eeeda26f4642a411fa`.
 
 ## Pre-push evidence 2026-08-19
 
@@ -121,3 +122,6 @@ Deliverable: зеленые gates, source tag, consumer commit и GitHub refs.
 - Distribution harness: `14/14`, включая настоящий commit/clone, `.gitkeep` roots и descriptor hashes после checkout.
 - GitHub target и authentication проверены через `ls-remote` и `push --dry-run` без изменения remote.
 - Full-tree privacy review выявил и удалил личное имя из `LICENSE`; публичная история собирается с нейтральной служебной подписью.
+- Actual `v1.6.2` payload: 141 файл, 140 SHA-256 entries, 9 prompt-файлов, hash mismatches `0`.
+- Fresh consumer clone: `DistributionTemplate` PASS, 122 канонических Markdown-файла, clean worktree, 1 neutral-author commit.
+- Atomic push создал только `main`, `source` и `v1.6.2`; remote `HEAD` указывает на `main`, unpublished tags отсутствуют.
