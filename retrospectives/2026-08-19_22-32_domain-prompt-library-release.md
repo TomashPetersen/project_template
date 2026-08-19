@@ -1,0 +1,68 @@
+---
+artifact_kind: retrospective
+knowledge_outcome: none
+candidate_ids: []
+affected_canon:
+  - .gitattributes
+  - .template-manifest.json
+  - INDEX.md
+  - LICENSE
+  - PROJECT.md
+  - README.md
+  - scripts/test-github-template-distribution.ps1
+  - scripts/verify-analysis.ps1
+  - scripts/verify-structure.ps1
+  - TEMPLATE-DISTRIBUTION.json
+  - TEMPLATE-CHANGELOG.md
+  - TEMPLATE.md
+  - prompts/README.md
+blocked_reason: null
+---
+
+# Ретроспектива: доменная библиотека промтов
+
+## Задача и связи
+
+Владелец попросил дополнить onboarding короткими интервью и prompts для заполнения значимых папок, затем выпустить шаблон в GitHub.
+
+- [План](../plans/2026-08-19-domain-prompt-library-release.md)
+- [Контракт GitHub distribution](../docs/decisions/2026-08-17-github-template-distribution.md)
+
+## Что сделано
+
+- Добавлен переносимый индекс и восемь доменных prompts для AI Clone, паспорта, идеи, business, research, analysis, delivery и knowledge/mastery.
+- README связывает быстрый маршрут с отдельными файлами, не копируя внутрь весь доменный contract.
+- AI Clone и business используют короткое поэтапное интервью с подтверждением резюме.
+- Manifest, descriptor placeholder, template contract и changelog обновлены до `1.6.2`.
+
+## Что проверено и какими командами
+
+- `verify-knowledge.ps1` - semantic gate прошел.
+- `verify-structure.ps1 -Mode TemplateSource` - 145 канонических Markdown-файлов.
+- `test-github-template-distribution.ps1` - `14/14`, включая настоящий commit/clone.
+- `verify-analysis.ps1 -SelfTest` - `54/54` после разрешения `.gitkeep` marker.
+- Focused privacy review - 9 файлов, 226 строк, PII/secret/path findings `0`.
+- Manifest review - все 9 prompt-файлов входят в portable allowlist.
+- `git diff --check` - замечаний нет.
+- `git push --dry-run origin source` - GitHub authentication и target подтверждены без изменения remote.
+
+## Что не получилось или осталось
+
+Pre-release review обнаружил, что Git не переносит объявленные пустые run-каталоги, а `eol=crlf` меняет SHA-256 семи portable `.ps1` после checkout. Дополнительный full-tree privacy review нашел личное имя в `LICENSE` и персональные author metadata в локальной Git-истории. Локальные tags `v1.6.0` и `v1.6.1` не публикуются; markers, единый LF, нейтральная лицензия и чистая public history выпускаются как `v1.6.2`.
+
+## Как было и как стало
+
+Раньше README содержал несколько общих примеров, но для заполнения разных зон требовалось самостоятельно формулировать границы задачи. Теперь README ведет к короткому доменному prompt с вопросами, target paths, stop conditions и критерием готовности.
+
+## Что выучено
+
+Prompt library полезнее как portable navigation layer, а не как второй policy: правила остаются в `AGENTS.md`, domain indexes и skills, а prompts только запускают правильный маршрут.
+
+Локальная directory-copy проверка не доказывает GitHub delivery для пустых каталогов. Release harness обязан включать настоящий commit/clone roundtrip.
+
+## Security review
+
+- Персональные данные: prompts не содержат данных владельца и запрещают лишний сбор PII; личное имя удалено из `LICENSE`, локальная персонализированная Git-история исключена из public refs.
+- Контент третьих лиц: новый сторонний контент не добавлен.
+- Внешние отправки: выполнены только `ls-remote` и push dry-run к явно указанному repository; actual push еще не выполнялся.
+- Секреты: credentials не читались и не сохранялись; Git authentication делегирована настроенному credential helper.
