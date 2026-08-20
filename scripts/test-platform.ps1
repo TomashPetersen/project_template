@@ -8,7 +8,7 @@ $modulePath = Join-Path $sourceRoot 'scripts/lib/ModelProject.Platform.psm1'
 Import-Module $modulePath -Force
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
+$tempBase = Get-ModelProjectSystemTempRoot
 $tempComparison = Get-ModelProjectPathComparison -Path $tempBase
 $fixtureRoot = [System.IO.Path]::GetFullPath((Join-Path $tempBase ('model-project-platform-' + [guid]::NewGuid().ToString('N'))))
 $linkPath = $null
@@ -28,6 +28,9 @@ try {
         throw 'Unsafe platform fixture root.'
     }
     [void][System.IO.Directory]::CreateDirectory($fixtureRoot)
+    if ($null -ne (Get-ModelProjectLinkInFullChain -Path $tempBase)) {
+        throw 'Physical system temp не должен содержать link chain.'
+    }
     $inside = Join-Path $fixtureRoot 'inside'
     [void][System.IO.Directory]::CreateDirectory($inside)
     $sibling = Join-Path (Split-Path -Parent $fixtureRoot) ([System.IO.Path]::GetFileName($fixtureRoot) + '-sibling')
@@ -66,9 +69,15 @@ try {
         }
     }
     if ($linkCreated) {
+        $targetChild = Join-Path $target 'child.txt'
+        [System.IO.File]::WriteAllText($targetChild, "linked`n", $utf8NoBom)
         $linkedChild = Join-Path $linkPath 'child.txt'
         if ($null -eq (Get-ModelProjectLinkInFullChain -Path $linkedChild)) {
             throw 'Symlink/reparse chain не обнаружен.'
+        }
+        $physicalChild = Resolve-ModelProjectPhysicalPath -Path $linkedChild
+        if ($physicalChild -cne [System.IO.Path]::GetFullPath($targetChild)) {
+            throw 'Physical path resolver вернул неверный target.'
         }
         Assert-Blocked -Label 'Assert no-link' -Action { Assert-ModelProjectNoLinkInFullChain -Path $linkedChild }
         [System.IO.Directory]::Delete($linkPath, $false)
@@ -84,6 +93,13 @@ try {
 
     $pwsh = Get-ModelProjectPowerShellHost -ControlledRoots @($sourceRoot, $fixtureRoot)
     $git = Get-ModelProjectGitExecutable -ControlledRoots @($sourceRoot, $fixtureRoot)
+    if ($null -ne (Get-ModelProjectLinkInFullChain -Path $pwsh) -or
+        $null -ne (Get-ModelProjectLinkInFullChain -Path $git)) {
+        throw 'Trusted executable должен возвращаться физическим path без links.'
+    }
+    Assert-Blocked -Label 'Missing physical path' -Action {
+        Resolve-ModelProjectPhysicalPath -Path (Join-Path $fixtureRoot 'missing.exe')
+    }
     $probe = 'argument with spaces "quotes" and \slashes'
     $argumentProbeScript = Join-Path $fixtureRoot 'argument-probe.ps1'
     [System.IO.File]::WriteAllText(
@@ -132,7 +148,7 @@ try {
         }
     }
     finally { Exit-ModelProjectFileLock -Lock $lock }
-    if ($lockPath -notlike (Join-Path ([System.IO.Path]::GetTempPath()) 'model-project-locks/*')) {
+    if ($lockPath -notlike (Join-Path $tempBase 'model-project-locks/*')) {
         throw 'Lock file находится вне system temp.'
     }
     if (Test-Path -LiteralPath $lockPath -PathType Leaf) {

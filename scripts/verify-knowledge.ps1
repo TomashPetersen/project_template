@@ -311,7 +311,8 @@ try {
 catch { throw $knowledgeModuleIntegrityError }
 $trustedPlatformExportNames = @(
     'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
-    'Get-ModelProjectNullDevice', 'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectNullDevice', 'Resolve-ModelProjectPhysicalPath', 'Get-ModelProjectSystemTempRoot',
+    'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
     'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
     'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
     'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',
@@ -342,6 +343,7 @@ foreach ($commandName in $trustedPlatformExportNames) {
 $script:mppGetGitExecutable = $trustedPlatformCommands['Get-ModelProjectGitExecutable']
 $script:mppGetPowerShellHost = $trustedPlatformCommands['Get-ModelProjectPowerShellHost']
 $script:mppGetNullDevice = $trustedPlatformCommands['Get-ModelProjectNullDevice']
+$script:mppGetSystemTempRoot = $trustedPlatformCommands['Get-ModelProjectSystemTempRoot']
 $script:mppGetPathComparison = $trustedPlatformCommands['Get-ModelProjectPathComparison']
 $script:mppSetGitEnvironment = $trustedPlatformCommands['Set-ModelProjectSanitizedGitEnvironment']
 $script:nullDevice = & $script:mppGetNullDevice
@@ -5047,11 +5049,12 @@ function Assert-GeneratorCliRejectIsRedacted {
 }
 
 function Invoke-SelfTests {
-    $temporaryBase = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) ('knowledge-selftest-' + [guid]::NewGuid().ToString('N'))))
-    $expectedPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/') +
+    $physicalTemp = & $script:mppGetSystemTempRoot
+    $temporaryBase = [System.IO.Path]::GetFullPath((Join-Path $physicalTemp ('knowledge-selftest-' + [guid]::NewGuid().ToString('N'))))
+    $expectedPrefix = $physicalTemp +
         [System.IO.Path]::DirectorySeparatorChar +
         'knowledge-selftest-'
-    $temporaryComparison = & $script:mppGetPathComparison -Path ([System.IO.Path]::GetTempPath())
+    $temporaryComparison = & $script:mppGetPathComparison -Path $physicalTemp
     if (-not $temporaryBase.StartsWith($expectedPrefix, $temporaryComparison)) {
         throw "Небезопасный self-test path: $temporaryBase"
     }

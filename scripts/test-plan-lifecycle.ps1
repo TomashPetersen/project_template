@@ -7,8 +7,8 @@ $sourceRoot = if ([string]::IsNullOrWhiteSpace($Root)) { Split-Path -Parent $PSS
 Import-Module (Join-Path $sourceRoot 'scripts/lib/ModelProject.Platform.psm1') -Force
 $pwshPath = (Get-Process -Id $PID).Path
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-$tempRoot = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) ('model-project-plan-fixture-' + [guid]::NewGuid().ToString('N'))))
-$tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+$tempBase = Get-ModelProjectSystemTempRoot
+$tempRoot = [System.IO.Path]::GetFullPath((Join-Path $tempBase ('model-project-plan-fixture-' + [guid]::NewGuid().ToString('N'))))
 $tempComparison = Get-ModelProjectPathComparison -Path $tempBase
 
 function Write-FixtureText {

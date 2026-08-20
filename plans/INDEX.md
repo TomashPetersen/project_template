@@ -21,6 +21,7 @@
 | legacy:2026-08-16-assisted-learning-knowledge-graph | assisted-learning-knowledge-graph | - | - | [План: обучаемая аналитическая система и Wikilink-граф](2026-08-16-assisted-learning-knowledge-graph.md) |
 | PLAN-20260820-codex-first-template-v2 | codex-first-template-v2 | - | 2026-08-20T10:04:38Z | [План: Codex-first шаблон проекта v2.0.0](2026-08-20-codex-first-template-v2.md) |
 | legacy:2026-08-19-domain-prompt-library-release | domain-prompt-library-release | - | - | [План: доменная библиотека промтов и GitHub release](2026-08-19-domain-prompt-library-release.md) |
+| PLAN-20260820-fix-macos-symlink-paths | fix-macos-symlink-paths | - | 2026-08-20T18:22:29Z | [План: Исправление macOS trusted symlink paths для CI](2026-08-20-fix-macos-symlink-paths.md) |
 | legacy:2026-08-17-github-template-distribution | github-template-distribution | - | - | [План: распространение через GitHub Template](2026-08-17-github-template-distribution.md) |
 | legacy:2026-07-31-knowledge-control-plane-hardening | knowledge-control-plane-hardening | - | - | [План: hardening knowledge control plane 1.2.1](2026-07-31-knowledge-control-plane-hardening.md) |
 | legacy:2026-07-29-knowledge-lifecycle-routing | knowledge-lifecycle-routing | - | - | [План: маршрутизация и автонакопление знаний](2026-07-29-knowledge-lifecycle-routing.md) |

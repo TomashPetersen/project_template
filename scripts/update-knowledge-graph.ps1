@@ -75,7 +75,8 @@ if (-not (Test-Path -LiteralPath $trustedPlatformModulePath -PathType Leaf) -or
 $trustedPlatformModule = Import-Module -Name $trustedPlatformModulePath -Scope Local -Force -PassThru -ErrorAction Stop
 $trustedPlatformExportNames = @(
     'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
-    'Get-ModelProjectNullDevice', 'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectNullDevice', 'Resolve-ModelProjectPhysicalPath', 'Get-ModelProjectSystemTempRoot',
+    'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
     'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
     'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
     'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',
@@ -86,15 +87,21 @@ if ($null -eq $trustedPlatformModule -or
     Stop-Graph 'trusted-platform-exports'
 }
 $pathComparisonCommand = $trustedPlatformModule.ExportedCommands['Get-ModelProjectPathComparison']
-if ($null -eq $pathComparisonCommand -or
-    $null -eq $pathComparisonCommand.Module -or
+$systemTempCommand = $trustedPlatformModule.ExportedCommands['Get-ModelProjectSystemTempRoot']
+if ($null -eq $pathComparisonCommand -or $null -eq $systemTempCommand -or
+    $null -eq $pathComparisonCommand.Module -or $null -eq $systemTempCommand.Module -or
     -not [System.IO.Path]::GetFullPath([string]$pathComparisonCommand.Module.Path).Equals(
+        $trustedPlatformModulePath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -or
+    -not [System.IO.Path]::GetFullPath([string]$systemTempCommand.Module.Path).Equals(
         $trustedPlatformModulePath,
         [System.StringComparison]::OrdinalIgnoreCase
     )) {
     Stop-Graph 'trusted-platform-exports'
 }
 $script:mppGetPathComparison = $pathComparisonCommand
+$script:mppGetSystemTempRoot = $systemTempCommand
 $bootstrapPathComparison = & $script:mppGetPathComparison -Path $trustedScriptsRoot
 $trustedModulePath = [System.IO.Path]::GetFullPath(
     [System.IO.Path]::Combine($trustedScriptsRoot, 'lib', 'ModelProject.Knowledge.psm1')
@@ -546,9 +553,10 @@ function Invoke-GraphMode {
 }
 
 function Invoke-GraphSelfTest {
-    $base = Join-Path ([System.IO.Path]::GetTempPath()) ('ModelProjectGraphSelfTest-' + [guid]::NewGuid().ToString('N'))
-    $expectedPrefix = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) 'ModelProjectGraphSelfTest-'))
-    $tempComparison = & $script:mppGetPathComparison -Path ([System.IO.Path]::GetTempPath())
+    $physicalTemp = & $script:mppGetSystemTempRoot
+    $base = Join-Path $physicalTemp ('ModelProjectGraphSelfTest-' + [guid]::NewGuid().ToString('N'))
+    $expectedPrefix = [System.IO.Path]::GetFullPath((Join-Path $physicalTemp 'ModelProjectGraphSelfTest-'))
+    $tempComparison = & $script:mppGetPathComparison -Path $physicalTemp
     if (-not [System.IO.Path]::GetFullPath($base).StartsWith($expectedPrefix, $tempComparison)) { Stop-Graph 'unsafe-selftest-root' }
     $junctionPath = $null
     try {

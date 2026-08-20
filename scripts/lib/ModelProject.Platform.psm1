@@ -32,6 +32,54 @@ function Get-ModelProjectNullDevice {
     return '/dev/null'
 }
 
+function Resolve-ModelProjectPhysicalPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $full = Get-ModelProjectNormalizedFullPath -Path $Path
+    if (-not (Test-Path -LiteralPath $full)) {
+        throw 'Физический path должен существовать.'
+    }
+    $pathRoot = [System.IO.Path]::GetPathRoot($full)
+    $current = $pathRoot
+    $relative = $full.Substring($pathRoot.Length)
+    foreach ($segment in @($relative -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $candidate = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $candidate)) {
+            throw 'Не удалось разрешить существующий physical path.'
+        }
+        $item = Get-Item -LiteralPath $candidate -Force
+        $isReparse = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        $isLink = $item.PSObject.Properties.Name -contains 'LinkType' -and
+            [string]$item.LinkType -cin @('SymbolicLink', 'Junction')
+        if ($isReparse -or $isLink) {
+            try { $target = $item.ResolveLinkTarget($true) }
+            catch { throw 'Не удалось безопасно разрешить link target.' }
+            if ($null -eq $target -or [string]::IsNullOrWhiteSpace([string]$target.FullName) -or
+                -not (Test-Path -LiteralPath $target.FullName)) {
+                throw 'Link target отсутствует или недоступен.'
+            }
+            $current = Get-ModelProjectNormalizedFullPath -Path $target.FullName
+        }
+        else {
+            $current = Get-ModelProjectNormalizedFullPath -Path $candidate
+        }
+    }
+    if (-not (Test-Path -LiteralPath $current)) {
+        throw 'Разрешенный physical path отсутствует.'
+    }
+    return $current
+}
+
+function Get-ModelProjectSystemTempRoot {
+    $rawTemp = Get-ModelProjectNormalizedFullPath -Path ([System.IO.Path]::GetTempPath())
+    $physicalTemp = Resolve-ModelProjectPhysicalPath -Path $rawTemp
+    if (-not (Test-Path -LiteralPath $physicalTemp -PathType Container)) {
+        throw 'System temp не является существующим каталогом.'
+    }
+    Assert-ModelProjectNoLinkInFullChain -Path $physicalTemp
+    return $physicalTemp
+}
+
 function Get-ModelProjectCaseVariantPath {
     param([Parameter(Mandatory = $true)][string]$ExistingPath)
 
@@ -138,18 +186,28 @@ function Get-ModelProjectTrustedApplication {
     if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) {
         throw 'Доверенное приложение не найдено.'
     }
-    $path = Get-ModelProjectNormalizedFullPath -Path ([string]$command.Source)
-    $leaf = [System.IO.Path]::GetFileName($path)
-    if ($leaf -cnotin $AllowedLeaves -or -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    $originalPath = Get-ModelProjectNormalizedFullPath -Path ([string]$command.Source)
+    $originalLeaf = [System.IO.Path]::GetFileName($originalPath)
+    if ($originalLeaf -cnotin $AllowedLeaves -or -not (Test-Path -LiteralPath $originalPath -PathType Leaf)) {
         throw 'Доверенное приложение не прошло проверку имени и типа.'
     }
-    Assert-ModelProjectNoLinkInFullChain -Path $path
     foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $path -AllowEqual) {
+        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $originalPath -AllowEqual) {
             throw 'Доверенное приложение не может находиться внутри управляемого корня.'
         }
     }
-    return $path
+    $physicalPath = Resolve-ModelProjectPhysicalPath -Path $originalPath
+    $physicalLeaf = [System.IO.Path]::GetFileName($physicalPath)
+    if ($physicalLeaf -cnotin $AllowedLeaves -or -not (Test-Path -LiteralPath $physicalPath -PathType Leaf)) {
+        throw 'Physical target доверенного приложения не прошел проверку имени и типа.'
+    }
+    Assert-ModelProjectNoLinkInFullChain -Path $physicalPath
+    foreach ($controlledRoot in $ControlledRoots) {
+        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $physicalPath -AllowEqual) {
+            throw 'Physical target доверенного приложения не может находиться внутри управляемого корня.'
+        }
+    }
+    return $physicalPath
 }
 
 function Get-ModelProjectGitExecutable {
@@ -165,20 +223,30 @@ function Get-ModelProjectPowerShellHost {
     param([string[]]$ControlledRoots = @())
 
     try {
-        $path = Get-ModelProjectNormalizedFullPath -Path ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+        $originalPath = Get-ModelProjectNormalizedFullPath -Path ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
     }
     catch { throw 'Не удалось определить текущий PowerShell 7 host.' }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('pwsh', 'pwsh.exe') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    if ([System.IO.Path]::GetFileName($originalPath) -cnotin @('pwsh', 'pwsh.exe') -or
+        -not (Test-Path -LiteralPath $originalPath -PathType Leaf)) {
         throw 'Для шаблона требуется PowerShell 7 host pwsh.'
     }
-    Assert-ModelProjectNoLinkInFullChain -Path $path
     foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $path -AllowEqual) {
+        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $originalPath -AllowEqual) {
             throw 'PowerShell host не может находиться внутри управляемого корня.'
         }
     }
-    return $path
+    $physicalPath = Resolve-ModelProjectPhysicalPath -Path $originalPath
+    if ([System.IO.Path]::GetFileName($physicalPath) -cnotin @('pwsh', 'pwsh.exe') -or
+        -not (Test-Path -LiteralPath $physicalPath -PathType Leaf)) {
+        throw 'Physical target PowerShell host не прошел проверку имени и типа.'
+    }
+    Assert-ModelProjectNoLinkInFullChain -Path $physicalPath
+    foreach ($controlledRoot in $ControlledRoots) {
+        if (Test-ModelProjectPathWithinRoot -Root $controlledRoot -Path $physicalPath -AllowEqual) {
+            throw 'Physical target PowerShell host не может находиться внутри управляемого корня.'
+        }
+    }
+    return $physicalPath
 }
 
 function Set-ModelProjectSanitizedGitEnvironment {
@@ -298,7 +366,7 @@ function Enter-ModelProjectFileLock {
     $identity = $identityRoot + "`n" + $ResourceKey
     $digest = [System.Security.Cryptography.SHA256]::HashData($script:Utf8NoBom.GetBytes($identity))
     $hash = [Convert]::ToHexString($digest).ToLowerInvariant()
-    $lockDirectory = Get-ModelProjectNormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'model-project-locks')
+    $lockDirectory = Get-ModelProjectNormalizedFullPath -Path (Join-Path (Get-ModelProjectSystemTempRoot) 'model-project-locks')
     if (-not (Test-Path -LiteralPath $lockDirectory -PathType Container)) {
         [void][System.IO.Directory]::CreateDirectory($lockDirectory)
     }
@@ -341,6 +409,8 @@ Microsoft.PowerShell.Core\Export-ModuleMember -Function @(
     'Test-ModelProjectIsWindows',
     'Test-ModelProjectIsMacOS',
     'Get-ModelProjectNullDevice',
+    'Resolve-ModelProjectPhysicalPath',
+    'Get-ModelProjectSystemTempRoot',
     'Get-ModelProjectPathComparison',
     'Test-ModelProjectPathWithinRoot',
     'Get-ModelProjectLinkInFullChain',

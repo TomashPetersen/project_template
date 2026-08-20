@@ -74,7 +74,8 @@ if (-not (Test-Path -LiteralPath $trustedPlatformModulePath -PathType Leaf) -or
 $trustedPlatformModule = Import-Module -Name $trustedPlatformModulePath -Scope Local -Force -PassThru -ErrorAction Stop
 $trustedPlatformExportNames = @(
     'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
-    'Get-ModelProjectNullDevice', 'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectNullDevice', 'Resolve-ModelProjectPhysicalPath', 'Get-ModelProjectSystemTempRoot',
+    'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
     'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
     'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
     'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',

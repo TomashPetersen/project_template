@@ -17,7 +17,7 @@ $utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
 $harnessRoot = Split-Path -Parent $PSScriptRoot
 Import-Module (Join-Path $harnessRoot 'scripts/lib/ModelProject.Platform.psm1') -Force
 $fixturePrefix = 'ModelProjectPrivacy-'
-$fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ($fixturePrefix + [guid]::NewGuid().ToString('N'))
+$fixtureRoot = Join-Path (Get-ModelProjectSystemTempRoot) ($fixturePrefix + [guid]::NewGuid().ToString('N'))
 $harnessExitCode = 1
 $caseResults = [System.Collections.Generic.List[object]]::new()
 
@@ -205,7 +205,7 @@ function Test-SafeFixtureRoot {
     param([Parameter(Mandatory = $true)][string]$Path)
 
     $canonical = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/')
-    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
+    $tempRoot = Get-ModelProjectSystemTempRoot
     $actualParent = [System.IO.Path]::GetFullPath((Split-Path -Parent $canonical)).TrimEnd([char[]]'\/')
     $leaf = Split-Path -Leaf $canonical
     $comparison = Get-ModelProjectPathComparison -Path $tempRoot
