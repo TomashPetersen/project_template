@@ -9,6 +9,7 @@
 - Local Mastery переведен на contract v2 и data-driven `mastery/INTENTS.json`; `new-mastery.ps1` поддерживает preview, direct authority, rollback, backlink и пересборку индексов.
 - Общий platform module централизует безопасные path/process/Git/lock/input primitives для PowerShell 7 на Windows и macOS. Source-only CI запускает contract gates на обеих ОС.
 - macOS trusted executables и system temp сначала разрешаются в физический final path, затем повторно проходят leaf, type, controlled-root и no-link gates; пользовательские project paths остаются строго no-link.
+- Negative fixtures создают directory links как `Junction` на Windows и `SymbolicLink` на Unix, сохраняя одинаковую fail-closed проверку reparse/symlink chains в Windows и macOS CI.
 - README начинается с отдельного Codex installation prompt, затем дает ручную установку, заполнение доменов, plans, codebase, Mastery и точный состав встроенных skills. MCP/plugins явно остаются opt-in.
 - Существующие generated projects автоматически не мигрируются. Stack-native каталоги и конфиги создаются только выбранным стеком.
 

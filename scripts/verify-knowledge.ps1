@@ -4706,6 +4706,25 @@ function Write-FixtureFile {
     [System.IO.File]::WriteAllText($path, $Content, $utf8NoBom)
 }
 
+function New-FixtureDirectoryLink {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+
+    $itemType = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows
+    )) { 'Junction' } else { 'SymbolicLink' }
+    $link = New-Item -ItemType $itemType -Path $Path -Target $Target -ErrorAction Stop
+    $isReparse = ($link.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    $isLink = $link.PSObject.Properties.Name -contains 'LinkType' -and
+        [string]$link.LinkType -cin @('SymbolicLink', 'Junction')
+    if (-not ($isReparse -or $isLink)) {
+        throw 'SELFTEST FAIL: directory link fixture не создан.'
+    }
+    return $link
+}
+
 function Get-FixtureCandidate {
     param(
         [string]$Id = 'KC-20260730-120000-deadbeef',
@@ -5186,7 +5205,7 @@ knowledge_capture_mode: report-only
         $reparseRoot = Join-Path $temporaryBase 'reparse-root'
         New-Item -ItemType Directory -Path $reparseTarget | Out-Null
         try {
-            New-Item -ItemType Junction -Path $reparseRoot -Target $reparseTarget | Out-Null
+            New-FixtureDirectoryLink -Path $reparseRoot -Target $reparseTarget | Out-Null
             $reparseVerification = Invoke-KnowledgeVerification $reparseRoot
             Assert-SelfTestIssueSet -Result $reparseVerification -AllowedPatterns @(
                 '^Корень репозитория.*reparse point'
@@ -6666,7 +6685,7 @@ related: []
         New-Item -ItemType Directory -Path $childTarget | Out-Null
         Write-FixtureFile -Base $childTarget -Relative 'source.md' -Content "# Child source`n"
         try {
-            New-Item -ItemType Junction -Path $childJunction -Target $childTarget | Out-Null
+            New-FixtureDirectoryLink -Path $childJunction -Target $childTarget | Out-Null
             $script:currentIssues = [System.Collections.Generic.List[string]]::new()
             $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
             $script:textReadCorpusBytes = [long]0

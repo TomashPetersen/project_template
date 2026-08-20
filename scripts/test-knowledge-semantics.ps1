@@ -1080,13 +1080,22 @@ Exactly one forbidden state-field combination is present.
                 Copy-Item -LiteralPath $seedRoot -Destination $caseRoot -Recurse
                 switch ($spec.Setup) {
                     'directory-reparse' {
-                        $realDirectory = Join-Path $caseRoot 'docs\a30-directory-target'
-                        $linkDirectory = Join-Path $caseRoot 'docs\a30-directory-link'
+                        $realDirectory = Join-Path $caseRoot 'docs/a30-directory-target'
+                        $linkDirectory = Join-Path $caseRoot 'docs/a30-directory-link'
                         New-Item -ItemType Directory -Path $realDirectory | Out-Null
                         Write-Utf8Fixture -Path (Join-Path $realDirectory 'source.md') -Content "# A30 directory reparse target`n"
-                        New-Item -ItemType Junction -Path $linkDirectory -Target $realDirectory -ErrorAction Stop | Out-Null
-                        $linkItem = Get-Item -LiteralPath $linkDirectory -Force
-                        if (($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+                        $linkItemType = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+                            [System.Runtime.InteropServices.OSPlatform]::Windows
+                        )) { 'Junction' } else { 'SymbolicLink' }
+                        $linkItem = New-Item `
+                            -ItemType $linkItemType `
+                            -Path $linkDirectory `
+                            -Target $realDirectory `
+                            -ErrorAction Stop
+                        $isReparse = ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+                        $isLink = $linkItem.PSObject.Properties.Name -contains 'LinkType' -and
+                            [string]$linkItem.LinkType -cin @('SymbolicLink', 'Junction')
+                        if (-not ($isReparse -or $isLink)) {
                             throw 'HARNESS-A30-DIRECTORY-REPARSE-NOT-CREATED'
                         }
                     }

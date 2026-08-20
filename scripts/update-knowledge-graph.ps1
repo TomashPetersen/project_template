@@ -592,7 +592,14 @@ function Invoke-GraphSelfTest {
         [System.IO.Directory]::CreateDirectory($unsafeRoot) | Out-Null
         [System.IO.Directory]::CreateDirectory($junctionTarget) | Out-Null
         $junctionPath = Join-Path $unsafeRoot 'knowledge'
-        New-Item -ItemType Junction -Path $junctionPath -Target $junctionTarget -ErrorAction Stop | Out-Null
+        $linkItemType = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::Windows
+        )) { 'Junction' } else { 'SymbolicLink' }
+        $linkItem = New-Item -ItemType $linkItemType -Path $junctionPath -Target $junctionTarget -ErrorAction Stop
+        $isReparse = ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        $isLink = $linkItem.PSObject.Properties.Name -contains 'LinkType' -and
+            [string]$linkItem.LinkType -cin @('SymbolicLink', 'Junction')
+        if (-not ($isReparse -or $isLink)) { Stop-Graph 'link-fixture-not-created' }
         $reparseBlocked = $false
         try { [void](Write-GraphAtomically -RepositoryRoot $unsafeRoot -Content "# Unsafe fixture`n") }
         catch { if ([string]$_.Exception.Message -ceq 'GRAPH:reparse-graph-path') { $reparseBlocked = $true } }
