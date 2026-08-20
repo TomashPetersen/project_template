@@ -16,9 +16,8 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$Description,
 
-    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$Owner
+    [string]$Owner = 'project-owner'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,6 +26,15 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
+$platformModulePath = Join-Path $PSScriptRoot 'lib/ModelProject.Platform.psm1'
+Import-Module $platformModulePath -Force
+$nullDevice = Get-ModelProjectNullDevice
+
+Assert-ModelProjectInputText -Value $Destination -Field Destination -MaxLength 1024
+Assert-ModelProjectInputText -Value $ProjectName -Field ProjectName -MaxLength 120 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()_+&/\-]{0,119}$'
+Assert-ModelProjectInputText -Value $ProjectSlug -Field ProjectSlug -MaxLength 63 -Pattern '^[a-z0-9][a-z0-9-]*$'
+Assert-ModelProjectInputText -Value $Description -Field Description -MaxLength 500 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()_+&%/''"\-]{0,499}$'
+Assert-ModelProjectInputText -Value $Owner -Field Owner -MaxLength 80 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} ._+\-]{0,79}$'
 
 function Assert-ManifestRelativePath {
     param(
@@ -53,7 +61,7 @@ function Assert-ManifestRelativePath {
 
 function Assert-UniquePaths {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Paths,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Paths,
         [Parameter(Mandatory = $true)][string]$FieldName
     )
 
@@ -71,21 +79,7 @@ function Assert-UniquePaths {
 function Assert-NoReparseChain {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
-    $full = [System.IO.Path]::GetFullPath($AbsolutePath)
-    $pathRoot = [System.IO.Path]::GetPathRoot($full)
-    $current = $pathRoot
-    $relative = $full.Substring($pathRoot.Length)
-
-    foreach ($segment in (($relative -split '[\\/]') | Where-Object { $_ -ne '' })) {
-        $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) {
-            break
-        }
-        $item = Get-Item -LiteralPath $current -Force
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Путь содержит reparse point: $current"
-        }
-    }
+    Assert-ModelProjectNoLinkInFullChain -Path $AbsolutePath
 }
 
 function Test-PathWithinControlledRoot {
@@ -94,94 +88,19 @@ function Test-PathWithinControlledRoot {
         [Parameter(Mandatory = $true)][string]$ControlledRoot
     )
 
-    $candidate = [System.IO.Path]::GetFullPath($CandidatePath).TrimEnd([char[]]'\/')
-    $root = [System.IO.Path]::GetFullPath($ControlledRoot).TrimEnd([char[]]'\/')
-    return (
-        $candidate.Equals($root, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.StartsWith($root + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
-    )
+    return (Test-ModelProjectPathWithinRoot -Root $ControlledRoot -Path $CandidatePath -AllowEqual)
 }
 
 function Get-TrustedGitExecutable {
     param([Parameter(Mandatory = $true)][string[]]$ControlledRoots)
 
-    $command = Get-Command -Name 'git.exe' -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $command) {
-        $command = Get-Command -Name 'git' -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-    }
-    if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) {
-        throw 'Доверенный Git executable не найден.'
-    }
-
-    try { $path = [System.IO.Path]::GetFullPath([string]$command.Source) }
-    catch { throw 'Доверенный Git executable имеет некорректный путь.' }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('git.exe', 'git') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'Доверенный Git executable не прошел проверку имени и типа.'
-    }
-    Assert-NoReparseChain $path
-    foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-PathWithinControlledRoot -CandidatePath $path -ControlledRoot $controlledRoot) {
-            throw 'Git executable не может находиться внутри управляемого корня проекта.'
-        }
-    }
-    return $path
+    return (Get-ModelProjectGitExecutable -ControlledRoots $ControlledRoots)
 }
 
 function Get-TrustedCurrentPowerShellHost {
     param([Parameter(Mandatory = $true)][string[]]$ControlledRoots)
 
-    try { $path = [System.IO.Path]::GetFullPath((Get-Process -Id $PID -ErrorAction Stop).MainModule.FileName) }
-    catch { throw 'Не удалось точно определить текущий PowerShell host.' }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('powershell.exe', 'pwsh.exe') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'Текущий PowerShell host не прошел проверку имени и типа.'
-    }
-    Assert-NoReparseChain $path
-    foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-PathWithinControlledRoot -CandidatePath $path -ControlledRoot $controlledRoot) {
-            throw 'PowerShell host не может находиться внутри управляемого корня проекта.'
-        }
-    }
-    return $path
-}
-
-function ConvertTo-SanitizedProcessArgument {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-
-    if ($Value.IndexOf([char]0) -ge 0 -or $Value -match '[\r\n]') {
-        throw 'Аргумент дочернего процесса содержит запрещенный символ.'
-    }
-    if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
-
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.Append('"')
-    $backslashes = 0
-    foreach ($character in $Value.ToCharArray()) {
-        if ($character -eq '\') {
-            $backslashes++
-            continue
-        }
-        if ($character -eq '"') {
-            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
-            [void]$builder.Append('"')
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) {
-            [void]$builder.Append(('\' * $backslashes))
-            $backslashes = 0
-        }
-        [void]$builder.Append($character)
-    }
-    if ($backslashes -gt 0) {
-        [void]$builder.Append(('\' * ($backslashes * 2)))
-    }
-    [void]$builder.Append('"')
-    return $builder.ToString()
+    return (Get-ModelProjectPowerShellHost -ControlledRoots $ControlledRoots)
 }
 
 function Invoke-SanitizedProcess {
@@ -190,56 +109,10 @@ function Invoke-SanitizedProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $Executable
-    $startInfo.Arguments = (($Arguments | ForEach-Object {
-        ConvertTo-SanitizedProcessArgument -Value ([string]$_)
-    }) -join ' ')
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $null = $startInfo.EnvironmentVariables
-    $environment = $startInfo.Environment
-    if ($null -eq $environment) {
-        throw 'Окружение дочернего процесса недоступно.'
-    }
-    foreach ($name in @($environment.Keys)) {
-        if (([string]$name).StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$environment.Remove([string]$name)
-        }
-    }
-    $isPowerShellHost = [System.IO.Path]::GetFileName($Executable) -cin @('powershell.exe', 'pwsh.exe')
-    if ($isPowerShellHost) {
-        $startInfo.StandardOutputEncoding = $utf8NoBom
-        $startInfo.StandardErrorEncoding = $utf8NoBom
-    }
-    else {
-        $environment['GIT_CONFIG_NOSYSTEM'] = '1'
-        $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
-        $environment['GIT_CONFIG_SYSTEM'] = 'NUL'
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    try {
-        if (-not $process.Start()) {
-            throw 'Не удалось запустить дочерний процесс.'
-        }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $output = [System.Collections.Generic.List[string]]::new()
-        foreach ($streamText in @($stdoutTask.Result, $stderrTask.Result)) {
-            foreach ($line in @($streamText -split '\r?\n')) {
-                if ($line.Length -gt 0) { $output.Add($line) | Out-Null }
-            }
-        }
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = @($output) }
-    }
-    finally {
-        $process.Dispose()
-    }
+    $isGit = [System.IO.Path]::GetFileName($Executable) -cin @('git', 'git.exe')
+    $result = Invoke-ModelProjectProcess -Executable $Executable -Arguments $Arguments -GitEnvironment:$isGit
+    if ($result.LimitExceeded) { throw 'Дочерний процесс превысил лимит вывода.' }
+    return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = @($result.Output) }
 }
 
 function Read-BoundedUtf8File {
@@ -332,11 +205,13 @@ function Assert-LocalDestination {
         throw "Не удалось определить локальный диск destination: $pathRoot"
     }
 
-    $driveName = $pathRoot.TrimEnd([char[]]'\/').TrimEnd(':')
-    $psDrive = Get-PSDrive -Name $driveName -PSProvider FileSystem -ErrorAction SilentlyContinue
-    if ($null -ne $psDrive -and -not [string]::IsNullOrWhiteSpace([string]$psDrive.DisplayRoot) -and
-        ([string]$psDrive.DisplayRoot).StartsWith('\\')) {
-        throw 'Destination на mapped network drive запрещен.'
+    if (Test-ModelProjectIsWindows) {
+        $driveName = $pathRoot.TrimEnd([char[]]'\/').TrimEnd(':')
+        $psDrive = Get-PSDrive -Name $driveName -PSProvider FileSystem -ErrorAction SilentlyContinue
+        if ($null -ne $psDrive -and -not [string]::IsNullOrWhiteSpace([string]$psDrive.DisplayRoot) -and
+            ([string]$psDrive.DisplayRoot).StartsWith('\\')) {
+            throw 'Destination на mapped network drive запрещен.'
+        }
     }
 }
 
@@ -346,9 +221,8 @@ function Copy-PortableFile {
         [Parameter(Mandatory = $true)][string]$TargetRoot
     )
 
-    $normalized = $RelativeFile.Replace('/', '\')
-    $source = Join-Path $sourceRoot $normalized
-    $target = Join-Path $TargetRoot $normalized
+    $source = Join-Path $sourceRoot $RelativeFile
+    $target = Join-Path $TargetRoot $RelativeFile
     $targetParent = Split-Path -Parent $target
     if (-not (Test-Path -LiteralPath $targetParent -PathType Container)) {
         New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
@@ -363,7 +237,7 @@ function Assert-PortableDestination {
     param(
         [Parameter(Mandatory = $true)][string]$BaseRoot,
         [Parameter(Mandatory = $true)][string[]]$PortableFiles,
-        [Parameter(Mandatory = $true)][string[]]$PortableEmptyDirectories
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$PortableEmptyDirectories
     )
 
     $actualFiles = @(Get-ChildItem -LiteralPath $BaseRoot -Recurse -File -Force | ForEach-Object {
@@ -375,7 +249,7 @@ function Assert-PortableDestination {
         throw "Копия не совпадает с portable_files. Missing: $($missingFiles -join ', '); extra: $($extraFiles -join ', ')"
     }
     foreach ($relativeDirectory in $PortableEmptyDirectories) {
-        $absoluteDirectory = Join-Path $BaseRoot $relativeDirectory.Replace('/', '\')
+        $absoluteDirectory = Join-Path $BaseRoot $relativeDirectory
         if (-not (Test-Path -LiteralPath $absoluteDirectory -PathType Container)) {
             throw "Копия не содержит portable empty directory: $relativeDirectory"
         }
@@ -421,7 +295,8 @@ function Remove-ExactStagingDirectory {
     $fullParent = [System.IO.Path]::GetFullPath($ExpectedParent).TrimEnd([char[]]'\/')
     $actualParent = [System.IO.Path]::GetDirectoryName($fullStaging)
     $leaf = [System.IO.Path]::GetFileName($fullStaging)
-    if (-not $actualParent.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $comparison = Get-ModelProjectPathComparison -Path $fullParent
+    if (-not $actualParent.Equals($fullParent, $comparison) -or
         $leaf -notmatch '^\.codex-new-project-[0-9a-f]{32}$') {
         throw "Отказ от cleanup неожиданного staging path: $fullStaging"
     }
@@ -444,8 +319,7 @@ $manifestPath = Join-Path $sourceRoot '.template-manifest.json'
 
 Assert-LocalDestination $Destination
 $destinationPath = [System.IO.Path]::GetFullPath($Destination).TrimEnd([char[]]'\/')
-if ($destinationPath.Equals($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-    $destinationPath.StartsWith($sourceRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (Test-ModelProjectPathWithinRoot -Root $sourceRoot -Path $destinationPath -AllowEqual) {
     throw 'Новый проект нельзя создавать внутри исходного шаблона.'
 }
 if (Test-Path -LiteralPath $destinationPath) {
@@ -545,14 +419,14 @@ foreach ($sourceOnlyPath in $sourceOnlyPaths) {
 }
 
 foreach ($relativeFile in $portableFiles) {
-    $source = Join-Path $sourceRoot $relativeFile.Replace('/', '\')
+    $source = Join-Path $sourceRoot $relativeFile
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Отсутствует portable file: $relativeFile"
     }
     Assert-NoReparseChain $source
 }
 foreach ($relativeDirectory in $portableEmptyDirectories) {
-    $sourceDirectory = Join-Path $sourceRoot $relativeDirectory.Replace('/', '\')
+    $sourceDirectory = Join-Path $sourceRoot $relativeDirectory
     if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) {
         throw "Отсутствует portable empty directory: $relativeDirectory"
     }
@@ -594,7 +468,7 @@ try {
         Copy-PortableFile -RelativeFile $relativeFile -TargetRoot $stagingPath
     }
     foreach ($relativeDirectory in $portableEmptyDirectories) {
-        $stagingDirectory = Join-Path $stagingPath $relativeDirectory.Replace('/', '\')
+        $stagingDirectory = Join-Path $stagingPath $relativeDirectory
         if (-not (Test-Path -LiteralPath $stagingDirectory -PathType Container)) {
             New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
         }
@@ -607,12 +481,12 @@ try {
     }
     foreach ($forbiddenPath in $generatedForbiddenPaths) {
         if ($renameFromPaths -ccontains $forbiddenPath) { continue }
-        if (Test-Path -LiteralPath (Join-Path $stagingPath $forbiddenPath.Replace('/', '\'))) {
+        if (Test-Path -LiteralPath (Join-Path $stagingPath $forbiddenPath)) {
             throw "Staging неожиданно получил generated forbidden path: $forbiddenPath"
         }
     }
 
-    $initializer = Join-Path $stagingPath 'scripts\initialize-project.ps1'
+    $initializer = Join-Path $stagingPath 'scripts/initialize-project.ps1'
     if (-not (Test-Path -LiteralPath $initializer -PathType Leaf)) {
         throw "Staging создан, но инициализатор не найден: $initializer"
     }

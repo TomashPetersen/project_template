@@ -5,19 +5,20 @@ Project-local mastery хранит только проверенные, пере
 ## Области
 
 - [Researcher Mastery](researcher/INDEX.md) - методы исследования перспективности новых IT/web-возможностей до разработки и на ранней стадии проверки.
-- [Analyst Mastery](analyst/INDEX.md) - методы бизнес- и системного анализа, requirements engineering, моделей, traceability и спецификаций.
-- [Local Mastery](local/INDEX.md) - зарегистрированные project-local расширения, созданные только в generated project.
+- [`INTENTS.json`](INTENTS.json) - расширяемый каталог категорий методов; новые intent IDs добавляются без изменения PowerShell-кода.
+- [Local Mastery](local/INDEX.md) - производный реестр примененных project-local методов, созданных только в generated project.
 
 ## Retrieval route
 
-Для research выбери baseline только из [`researcher/INDEX.md`](researcher/INDEX.md), для analysis - только из [`analyst/INDEX.md`](analyst/INDEX.md). В каждом workflow выбери один основной и не более одного дополняющего profile. Затем прочитай реестр [`local/INDEX.md`](local/INDEX.md) и при необходимости открой максимум одно зарегистрированное active, непросроченное и релевантное local extension. Точные baseline refs, local `method_id` и local refs запиши в brief и decision запуска.
+Для research выбери baseline только из [`researcher/INDEX.md`](researcher/INDEX.md). Для остальных типов работы используй зарегистрированный intent и при необходимости открой максимум одно active, непросроченное и релевантное расширение из [`local/INDEX.md`](local/INDEX.md). Точные baseline refs, local `method_id` и local refs запиши в рабочий plan или run.
 
-Пустой `mastery/local/` в template source и fresh generated copy является правильным состоянием.
+Пустой `mastery/local/`, кроме `INDEX.md` и `TEMPLATE.md`, в template source и fresh generated copy является правильным состоянием. Реестр пересобирается `scripts/update-mastery-index.ps1`.
 
 ## Границы
 
 - Процедура запуска, схема evidence и актуальные правила доступа находятся в [startup-researcher](../.agents/skills/startup-researcher/SKILL.md).
-- Процедура business/system analysis находится в [it-analysis](../.agents/skills/it-analysis/SKILL.md).
+- Delivery workflow находится в [project-delivery](../.agents/skills/project-delivery/SKILL.md).
+- Быстрое создание метода начинается с [`prompts/create-mastery.md`](../prompts/create-mastery.md), затем проходит method candidate, `new-mastery.ps1 -WhatIf` и отдельное approval.
 - Данные конкретных запусков находятся в [research](../research/INDEX.md).
 - Подтвержденные знания об идее находятся в [idea](../idea/INDEX.md).
 - Общая внешняя mastery-библиотека остается read-only и в проект не копируется.

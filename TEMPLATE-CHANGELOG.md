@@ -1,5 +1,16 @@
 # История шаблона
 
+## 2.0.0 - 2026-08-20
+
+- Breaking: default consumer перестроен вокруг Codex-first workflow и больше не содержит `analysis/`, business/docs analysis, Analyst Mastery, `it-analysis` и специализированные analysis prompts/scripts. Полная v1 остается в неизменяемом `v1.6.2`.
+- Добавлены отдельные owners для `product/`, `business/`, `docs/architecture/` и `docs/codebase/` с легким canon contract и детерминированным knowledge graph.
+- Все planning prompts получили `plan_policy`. Plan v2, derived index и Resume checkpoint обеспечивают один tracked plan, фазовое выполнение, drift detection и возобновление после нового чата или compaction.
+- Добавлен project-local `project-delivery`; `knowledge-curator` расширен plan closeout, а automatic promotion по-прежнему запрещен.
+- Local Mastery переведен на contract v2 и data-driven `mastery/INTENTS.json`; `new-mastery.ps1` поддерживает preview, direct authority, rollback, backlink и пересборку индексов.
+- Общий platform module централизует безопасные path/process/Git/lock/input primitives для PowerShell 7 на Windows и macOS. Source-only CI запускает contract gates на обеих ОС.
+- README начинается с отдельного Codex installation prompt, затем дает ручную установку, заполнение доменов, plans, codebase, Mastery и точный состав встроенных skills. MCP/plugins явно остаются opt-in.
+- Существующие generated projects автоматически не мигрируются. Stack-native каталоги и конфиги создаются только выбранным стеком.
+
 ## 1.6.2 - 2026-08-19
 
 - Удалено личное имя правообладателя из переносимого `LICENSE`; используется нейтральная атрибуция `Model Project contributors`.

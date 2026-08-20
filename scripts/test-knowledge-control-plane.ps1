@@ -17,6 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $sourceRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$powerShellHost = (Get-Process -Id $PID).Path
 $verifier = Join-Path $sourceRoot 'scripts\verify-knowledge.ps1'
 $newProject = Join-Path $sourceRoot 'scripts\new-project.ps1'
 $script:raceBaseRoot = ''
@@ -289,7 +290,7 @@ function Invoke-PublicGenerator {
         $AuthorityRef
     )
     return Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList $arguments `
         -WorkingDirectory $sourceRoot `
         -EnvironmentVariables $EnvironmentVariables
@@ -336,7 +337,7 @@ function Invoke-PublicVerifier {
 
     $fixtureVerifier = Join-Path $Root 'scripts\verify-knowledge.ps1'
     $result = Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList @(
             '-NoLogo',
             '-NoProfile',
@@ -587,7 +588,7 @@ function New-GeneratedFixtureRoot {
 
     $fixtureRoot = Join-Path $temporaryRoot $Name
     $result = Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList @(
             '-NoLogo',
             '-NoProfile',
@@ -628,7 +629,7 @@ function Invoke-PublicNewProject {
     )
 
     return Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList @(
             '-NoLogo',
             '-NoProfile',
@@ -660,7 +661,7 @@ function Invoke-PublicInitializer {
     )
 
     return Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList @(
             '-NoLogo',
             '-NoProfile',
@@ -1347,7 +1348,7 @@ function Invoke-BarrierRace {
                 '-WorkerClaimKey',
                 $claimKey
             )
-            $handles.Add((Start-CapturedProcess -FilePath 'powershell.exe' -ArgumentList $arguments -WorkingDirectory $Root)) | Out-Null
+            $handles.Add((Start-CapturedProcess -FilePath $powerShellHost -ArgumentList $arguments -WorkingDirectory $Root)) | Out-Null
         }
         [void]$barrier.Set()
         foreach ($handle in $handles) {
@@ -1385,7 +1386,7 @@ function Invoke-RaceVerifier {
         $Root
     )
     $result = Invoke-CapturedProcess `
-        -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
         -ArgumentList $arguments `
         -WorkingDirectory $Root
     return [pscustomobject]@{
@@ -1561,32 +1562,40 @@ try {
         Assert-InitializedReportOnlyProject -Root $generatedBaseRoot
         Assert-ZeroCommitGeneratedProject -Root $generatedBaseRoot
         foreach ($requiredPortablePath in @(
-            '.agents/skills/it-analysis/SKILL.md',
-            '.agents/skills/it-analysis/agents/openai.yaml',
-            '.agents/skills/it-analysis/assets/run-template/brief.md',
-            'analysis/CONTRACT.md',
-            'analysis/INDEX.md',
-            'business/analysis/INDEX.md',
-            'docs/analysis/INDEX.md',
+            '.agents/skills/project-delivery/SKILL.md',
+            '.agents/skills/knowledge-curator/SKILL.md',
+            '.agents/skills/startup-researcher/SKILL.md',
+            'business/architecture.md',
+            'docs/architecture/overview.md',
+            'docs/codebase/overview.md',
             'knowledge/graph/INDEX.md',
-            'mastery/analyst/INDEX.md',
+            'mastery/INTENTS.json',
             'mastery/local/TEMPLATE.md',
-            'scripts/new-analysis-run.ps1',
-            'scripts/verify-analysis.ps1',
+            'plans/INDEX.md',
+            'plans/TEMPLATE.md',
+            'product/INDEX.md',
+            'scripts/lib/ModelProject.Platform.psm1',
+            'scripts/new-plan.ps1',
+            'scripts/verify-canon.ps1',
+            'scripts/verify-plans.ps1',
             'scripts/update-knowledge-graph.ps1'
         )) {
             if (-not (Test-Path -LiteralPath (Join-Path $generatedBaseRoot $requiredPortablePath.Replace('/', '\')) -PathType Leaf)) {
-                throw "RED: A02 missing portable analysis payload: $requiredPortablePath"
+                throw "RED: A02 missing portable v2 payload: $requiredPortablePath"
             }
-        }
-        $analysisRunsRoot = Join-Path $generatedBaseRoot 'analysis\runs'
-        if (-not (Test-Path -LiteralPath $analysisRunsRoot -PathType Container) -or @(Get-ChildItem -LiteralPath $analysisRunsRoot -Force).Count -ne 0) {
-            throw 'RED: A02 fresh analysis/runs is missing or not empty.'
         }
         foreach ($forbiddenGeneratedPath in @(
             '.codex',
             '.agents/skills/bulletproof',
             '.agents/skills/frontend-design',
+            '.agents/skills/it-analysis',
+            'analysis',
+            'business/analysis',
+            'docs/analysis',
+            'mastery/analyst',
+            'prompts/analysis-run.md',
+            'scripts/new-analysis-run.ps1',
+            'scripts/verify-analysis.ps1',
             'plans/2026-08-14-portable-analysis-control-plane.md',
             'docs/decisions/2026-08-14-portable-analysis-control-plane.md',
             'retrospectives/2026-08-15_13-05_portable-analysis-control-plane.md',
@@ -1600,7 +1609,7 @@ try {
         $freshCopyResult = Invoke-PublicVerifier -Root $generatedBaseRoot
         Assert-Success -Result $freshCopyResult -Name 'A02 public new-project creates initialized + report-only with zero commits'
 
-        $externalVerifierPath = Join-Path $generatedBaseRoot 'scripts\verify-analysis.ps1'
+        $externalVerifierPath = Join-Path $generatedBaseRoot 'scripts\verify-knowledge.ps1'
         $externalGraphPath = Join-Path $generatedBaseRoot 'scripts\update-knowledge-graph.ps1'
         $externalModulePath = Join-Path $generatedBaseRoot 'scripts\lib\ModelProject.Knowledge.psm1'
         $externalVerifierBytes = [System.IO.File]::ReadAllBytes($externalVerifierPath)
@@ -1611,7 +1620,7 @@ try {
             [System.IO.File]::WriteAllText($externalGraphPath, "throw 'external graph script must not execute'`n", $utf8NoBom)
             [System.IO.File]::WriteAllText($externalModulePath, "throw 'external module must not import'`n", $utf8NoBom)
             $trustedStructureResult = Invoke-CapturedProcess `
-                -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
                 -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $sourceRoot 'scripts\verify-structure.ps1'),'-Root',$generatedBaseRoot,'-Mode','GeneratedProject') `
                 -WorkingDirectory $sourceRoot
             if ($trustedStructureResult.TimedOut -or $trustedStructureResult.ExitCode -ne 0) {
@@ -1629,14 +1638,14 @@ try {
         [System.IO.File]::Move($externalVerifierPath, $missingVerifierPath)
         try {
             $missingChildResult = Invoke-CapturedProcess `
-                -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
                 -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $generatedBaseRoot 'scripts\verify-structure.ps1'),'-Mode','GeneratedProject') `
                 -WorkingDirectory $sourceRoot
             $missingChildOutput = ([string]$missingChildResult.StdOut) + ([string]$missingChildResult.StdErr)
-            if ($missingChildResult.TimedOut -or $missingChildResult.ExitCode -eq 0 -or $missingChildOutput -notmatch '(?i)trusted analysis verifier') {
-                throw 'RED: A02 missing trusted analysis child did not fail closed.'
+            if ($missingChildResult.TimedOut -or $missingChildResult.ExitCode -eq 0 -or $missingChildOutput -notmatch '(?i)trusted knowledge verifier') {
+                throw 'RED: A02 missing trusted knowledge child did not fail closed.'
             }
-            Write-Host 'PASS: A02 missing trusted analysis child fails closed'
+            Write-Host 'PASS: A02 missing trusted knowledge child fails closed'
         }
         finally {
             [System.IO.File]::Move($missingVerifierPath, $externalVerifierPath)
@@ -1646,7 +1655,7 @@ try {
         [System.IO.File]::Move($externalGraphPath, $missingGraphPath)
         try {
             $missingGraphChildResult = Invoke-CapturedProcess `
-                -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
                 -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $generatedBaseRoot 'scripts\verify-structure.ps1'),'-Mode','GeneratedProject') `
                 -WorkingDirectory $sourceRoot
             $missingGraphChildOutput = ([string]$missingGraphChildResult.StdOut) + ([string]$missingGraphChildResult.StdErr)
@@ -1663,7 +1672,7 @@ try {
         Write-Utf8Fixture -Path $sourceOnlyProbe -Content "# source-only boundary probe`n"
         try {
             $sourceOnlyResult = Invoke-CapturedProcess `
-                -FilePath 'powershell.exe' `
+        -FilePath $powerShellHost `
                 -ArgumentList @(
                     '-NoLogo',
                     '-NoProfile',
@@ -2302,7 +2311,7 @@ claim_key: unrelated-malformed-corpus-entry
         Assert-SafePublicFailure `
             -Result $boundedTreeVerifier `
             -ForbiddenText @($boundedTreeRoot, $boundedTreeSentinel) `
-            -RequiredPattern '(?m)^- Git HEAD tree .+ bounded inventory limit \(10000 entries\)\.$' `
+            -RequiredPattern 'bounded inventory limit \(10000 entries\)' `
             -Name 'A23 verifier streams and bounds trusted HEAD tree inventory'
 
         $boundedTreeGenerator = Invoke-PublicGenerator `

@@ -1,80 +1,31 @@
 # Модельный проект
 
-Проверяемый шаблон для запуска независимого IT-продукта вместе с Codex. Он объединяет паспорт проекта, исследование идеи, business-контекст, системный и бизнес-анализ, project-local Mastery, knowledge lifecycle и безопасные PowerShell-проверки.
+Проверяемый шаблон для создания проектов вместе с Codex. В нем уже связаны паспорт проекта, AI Clone, идея, продукт, бизнес, архитектура, карта кодовой базы, сохраняемые планы, исследования, Mastery и управляемая база знаний.
 
-Шаблон поддерживает два способа старта:
+## Установка через Codex
 
-- GitHub Template - основной способ для нового репозитория и передачи знакомым;
-- локальная копия через `scripts/new-project.ps1` - способ владельца source template.
+1. На странице этого template repository нажми `Use this template` -> `Create a new repository`.
+2. Не включай `Include all branches`: новый проект должен получить только default consumer branch.
+3. Открой [готовый prompt установки через Codex](CODEX-INSTALL-PROMPT.md), замени значения `<...>` и целиком передай его Codex.
 
-## Самый быстрый старт через GitHub
+Prompt поручает Codex клонировать именно новый repository, проверить trust gates, выполнить однократную инициализацию и вернуть результат без `commit` и `push`. Канонический template repository нельзя клонировать как продукт.
 
-Поддерживаемая среда первого релиза: Windows 10/11, локальный NTFS-диск, PowerShell 7.6 или новее, Git 2.28 или новее и Codex.
+Поддерживаемая среда: Windows 10/11 или актуальная macOS, PowerShell 7 (`pwsh`), Git 2.28+ и обычная локальная файловая система.
 
-1. На странице template repository нажми `Use this template` -> `Create a new repository`.
-2. Не включай `Include all branches`. Новый repository должен получить только default consumer branch.
-3. Создай отдельный private repository для своего продукта.
-4. Открой [готовый prompt установки для Codex](CODEX-INSTALL-PROMPT.md), замени значения в угловых скобках и передай prompt Codex.
-5. После setup проверь результат:
+## Ручная установка
 
-```powershell
-pwsh -NoProfile -File .\scripts\verify-structure.ps1 -Mode GeneratedProject
-```
-
-Не клонируй канонический template repository как продукт и не меняй его remote. Сначала создай новый repository через GitHub Template, затем клонируй именно новый repository.
-
-## Ручная установка из нового GitHub repository
+Сначала создай новый repository через `Use this template` без `Include all branches`, затем выполни одинаковые команды в PowerShell 7 на Windows или macOS:
 
 ```powershell
 git clone <URL_НОВОГО_REPOSITORY> <ПАПКА_ПРОЕКТА>
 Set-Location <ПАПКА_ПРОЕКТА>
-pwsh -NoProfile -File .\scripts\initialize-project.ps1 `
-  -FromGitHubTemplate `
-  -ProjectName "Название продукта" `
-  -ProjectSlug "product-slug" `
-  -Description "Одно предложение о продукте" `
-  -Owner "Имя владельца"
-pwsh -NoProfile -File .\scripts\verify-structure.ps1 -Mode GeneratedProject
+pwsh -NoProfile -File ./scripts/initialize-project.ps1 -FromGitHubTemplate -ProjectName "Название продукта" -ProjectSlug "product-slug" -Description "Одно предложение о продукте" -Owner "project-owner"
+pwsh -NoProfile -File ./scripts/verify-structure.ps1 -Mode GeneratedProject
 ```
 
-Инициализатор требует чистый Git worktree, сохраняет существующий `.git`, не выполняет stage, commit или push и блокирует прямой clone канонического template remote. Повторный запуск запрещен.
+`-Owner` принимает роль или псевдоним, поэтому настоящее имя не требуется. Инициализатор требует чистый Git worktree, сохраняет существующий `.git` и `origin`, не выполняет stage, commit или push и блокирует прямой clone канонического template remote. Повторный запуск запрещен.
 
-## Локальное создание из source template
-
-Этот путь нужен только владельцу канонической source-копии:
-
-```powershell
-pwsh -NoProfile -File .\scripts\new-project.ps1 `
-  -Destination "..\Название продукта" `
-  -ProjectName "Название продукта" `
-  -ProjectSlug "product-slug" `
-  -Description "Одно предложение о продукте" `
-  -Owner "Имя владельца"
-```
-
-Скрипт создает отдельную папку и независимый Git repository на ветке `main`, но оставляет его без commits. Он копирует только allowlist из [`.template-manifest.json`](.template-manifest.json) и не переносит `.git` source template, `.codex`, owner overlays, заполненные runs, candidates или личные данные.
-
-## Как владельцу выпустить GitHub Template
-
-Каноническая история шаблона хранится в ветке `source`, а default-ветка `main` содержит только собранный consumer payload. `main` не редактируется вручную и всегда строится из exact tag ветки `source`.
-
-Минимальный release flow:
-
-1. В `source` закончить изменения, проверить фактический diff и пройти все release gates.
-2. Создать проверенный commit и tag вида `v<template_version>`, совпадающий с `.template-manifest.json`.
-3. Из clean tagged `source` собрать payload в новый несуществующий destination path внутри существующей локальной родительской папки:
-
-```powershell
-pwsh -NoProfile -File .\scripts\build-github-template.ps1 `
-  -SourceTag "v1.6.2" `
-  -TemplateRepositoryUrl "https://github.com/<OWNER>/<TEMPLATE_REPOSITORY>" `
-  -Destination "<ABSOLUTE_NEW_STAGING_PATH>"
-```
-
-4. Проверить staging в режиме `DistributionTemplate`, затем заменить содержимое derived-ветки `main` только этим payload и создать отдельный release commit.
-5. После явного разрешения владельца отправить `source`, `main` и exact tag в remote. В GitHub выбрать `main` как default branch, включить признак Template repository и не использовать `Include all branches` при создании продукта.
-
-Builder требует ветку `source`, clean tracked HEAD, exact tag, обычный tracked state всех manifest-файлов и HTTPS URL, совпадающий с GitHub identity `origin`. Он копирует только manifest allowlist, формирует SHA-256 descriptor и проверяет payload до atomic публикации. Destination заранее существовать не должен. Builder не выполняет commit, push и не меняет ветки. Публиковать source repository рекомендуется сначала как private и проверить установку в отдельном тестовом repository.
+Инструкции владельца по локальной сборке, выпуску веток `source`/`main` и release tag находятся только в source-only `TEMPLATE.md`; в созданный продукт они не переносятся.
 
 ## Что сделать после установки
 
@@ -85,9 +36,9 @@ Builder требует ветку `source`, clean tracked HEAD, exact tag, об�
 1. Заполнить [`ai-clone/CORE.md`](ai-clone/CORE.md) минимальным рабочим профилем владельца.
 2. Заполнить паспорт и границы в [`PROJECT.md`](PROJECT.md).
 3. Зафиксировать идею и критерии проверки через [`idea/INDEX.md`](idea/INDEX.md).
-4. Заполнить business-контекст через [`business/INDEX.md`](business/INDEX.md).
+4. Заполнить product- и business-контекст через [`product/INDEX.md`](product/INDEX.md) и [`business/INDEX.md`](business/INDEX.md).
 5. При необходимости провести evidence-based research через `$startup-researcher`.
-6. При необходимости создать требования, процессы, модели или ТЗ через `$it-analysis`.
+6. Для любого значимого изменения создать или продолжить Plan v2 через `$project-delivery`.
 7. Только после заполнения обязательных полей попросить Codex перевести проект в `active + report-only`.
 8. Отдельно проверить diff и дать прямую команду на baseline commit. Лишь после такого commit можно осознанно включать `safe-local`.
 
@@ -96,8 +47,8 @@ Builder требует ветку `source`, clean tracked HEAD, exact tag, об�
 ```text
 Прочитай AGENTS.md, ai-clone/CORE.md, PROJECT.md и INDEX.md. Проверь текущий режим
 репозитория. Задай только вопросы, без которых нельзя заполнить паспорт проекта.
-Не придумывай факты. Затем предложи минимальные изменения PROJECT.md, idea/ и
-business/, но ничего не коммить и не отправляй в remote.
+Не придумывай факты. Затем предложи минимальные изменения PROJECT.md, idea/,
+product/ и business/, но ничего не коммить и не отправляй в remote.
 ```
 
 ## Библиотека доменных промтов
@@ -109,11 +60,13 @@ business/, но ничего не коммить и не отправляй в r
 | Заполнить рабочий профиль владельца | [`AI Clone interview`](prompts/ai-clone-interview.md) | [`ai-clone/`](ai-clone/INDEX.md) |
 | Заполнить паспорт и activation gate | [`Project passport`](prompts/project-passport.md) | [`PROJECT.md`](PROJECT.md) |
 | Ограничить и проверить идею | [`Idea validation`](prompts/idea-validation.md) | [`idea/`](idea/INDEX.md) |
-| Собрать business baseline через интервью | [`Business baseline`](prompts/business-baseline.md) | [`business/`](business/INDEX.md) |
+| Собрать знания о продукте | [`Product interview`](prompts/product-interview.md) | [`product/`](product/INDEX.md) |
+| Описать бизнес и его архитектуру | [`Business architecture interview`](prompts/business-architecture-interview.md) | [`business/`](business/INDEX.md) |
+| Зафиксировать фактические architecture/codebase | [`Architecture and codebase inventory`](prompts/architecture-codebase-inventory.md) | [`docs/`](docs/INDEX.md) |
 | Запустить доказательное исследование | [`Research run`](prompts/research-run.md) | [`research/`](research/INDEX.md) |
-| Создать требования, процессы или модели | [`Analysis run`](prompts/analysis-run.md) | [`analysis/`](analysis/INDEX.md) |
-| Спланировать значимое изменение | [`Decision and delivery`](prompts/decision-and-delivery.md) | [`plans/`](plans/README.md), [`docs/`](docs/INDEX.md) |
-| Завершить diff или предложить Local Mastery | [`Knowledge and Mastery`](prompts/knowledge-and-mastery.md) | [`knowledge/`](knowledge/INDEX.md), [`mastery/local/`](mastery/local/INDEX.md) |
+| Спланировать значимое изменение | [`Plan and deliver`](prompts/plan-and-deliver.md) | [`plans/`](plans/README.md), код и [`docs/`](docs/INDEX.md) |
+| Продолжить ранее начатую работу | [`Continue plan`](prompts/continue-plan.md) | точный `<PLAN_REF>` |
+| Предложить Local Mastery | [`Create Mastery`](prompts/create-mastery.md) | [`knowledge/`](knowledge/INDEX.md), затем [`mastery/local/`](mastery/local/INDEX.md) |
 
 Prompt помогает собрать и маршрутизировать данные, но не дает разрешения на commit, push, promotion, external write или canonical handoff. Перед запуском замени `<ЗНАЧЕНИЯ>` и удали неприменимые пункты.
 
@@ -143,34 +96,84 @@ Prompt помогает собрать и маршрутизировать да�
 
 Для пошагового интервью используй готовый [`AI Clone interview prompt`](prompts/ai-clone-interview.md).
 
-## Как заполнить business
+## Как заполнить PROJECT и idea
 
-Папка [`business/`](business/INDEX.md) содержит канон одного продукта:
+[`PROJECT.md`](PROJECT.md) хранит только паспорт: проблему, проверяемую гипотезу, границы, критерии успеха и текущий статус. Не копируй в него подробности продукта, бизнеса или реализации.
 
-- `products/` - предложение, результат, тарифы и границы;
-- `audience/` - сегменты, боли, поведение, возражения и путь пользователя;
-- `economics/` - модель доходов, затрат и unit economics;
-- `marketing/` - позиционирование, каналы и воронка;
-- `goals/` - критерии успеха, провала и решения о продолжении;
-- `analysis/` - stakeholders, capabilities, процессы, правила и business requirements;
-- `raw/` - разрешенный исходный материал с provenance, но не подтвержденная истина.
+[`idea/`](idea/INDEX.md) разворачивает гипотезу: почему сейчас, vision, proof of value, MVP, риски, принципы, источники и результаты deep research. Начинай с ближайшего проверяемого предположения, а не с полного описания будущего продукта.
+
+```text
+Проведи короткое интервью для PROJECT.md и idea/. Отдели подтвержденные факты от
+гипотез, зафиксируй один ближайший proof of value, критерий провала и главные
+риски. Не выбирай стек и не придумывай рынок. Перед записью покажи target paths.
+```
+
+Готовые маршруты: [`Project passport`](prompts/project-passport.md) и [`Idea validation`](prompts/idea-validation.md).
+
+## Как заполнить product и business
+
+Папка [`product/`](product/INDEX.md) хранит подтвержденные знания о пользователях, опыте и возможностях продукта:
+
+- `overview.md` - назначение, ценность и границы;
+- `users-and-jobs.md` - сегменты, контекст, боли и jobs-to-be-done;
+- `experience.md` и `capabilities.md` - ожидаемый путь и способности без привязки к реализации;
+- `glossary.md` - единый язык проекта.
+
+Папка [`business/`](business/INDEX.md) хранит бизнес-механизм:
+
+- `overview.md` и `architecture.md` - предложение, роли, capabilities и потоки ценности;
+- `model-and-economics.md` - доход, затраты, unit economics и допущения;
+- `go-to-market.md` - позиционирование, каналы и путь к ценности;
+- `goals-and-metrics.md` - критерии решений и безопасные способы получить живые метрики;
+- `assets/` - разрешенные бренд- и доказательные материалы.
+
+Исходники всех доменов сохраняются только по прямой просьбе в [`inbox/raw/`](inbox/raw/README.md).
 
 Сначала заполняй только то, что влияет на ближайшую проверку гипотезы. Для каждого утверждения помечай тип: факт, наблюдение, гипотеза, мнение или цитата.
 
 Пример prompt:
 
 ```text
-На основе PROJECT.md и подтвержденных источников подготовь минимальный business
-baseline. Раздели факты, наблюдения и гипотезы. Заполни только релевантные файлы
-business/, добавь критерии проверки и provenance. Не создавай цены, метрики или
-сегменты без evidence. Перед записью покажи предполагаемые target paths.
+На основе PROJECT.md и подтвержденных источников подготовь минимальный product и
+business baseline. Раздели факты, наблюдения и гипотезы. Заполни только нужные
+файлы product/ и business/, добавь критерии проверки и source_refs. Не создавай
+сегменты, цены или метрики без evidence. Перед записью покажи target paths.
 ```
 
-Для интервью по продукту, аудитории, экономике, маркетингу и целям используй готовый [`Business baseline prompt`](prompts/business-baseline.md).
+Используй два коротких маршрута: [`Product interview`](prompts/product-interview.md) и [`Business architecture interview`](prompts/business-architecture-interview.md).
+
+## Как работать с plans
+
+Значимая реализация, bugfix, миграция, архитектурное изменение или release всегда ведется через один tracked Plan v2 в [`plans/`](plans/README.md). Планирующий prompt обязан создать или найти план до первой предметной записи. Файл не перемещается между папками и проходит состояния `planned` -> `in-progress` -> `complete`; `blocked` сохраняет причину и следующий шаг.
+
+- [`plans/INDEX.md`](plans/INDEX.md) показывает группы «Новый», «В работе», «Сделано» и «Заблокирован».
+- `Resume checkpoint` хранит текущую фазу, выполненное, проверки, рабочие paths и следующее действие.
+- Перед продолжением Codex сверяет checkpoint с Git state через `scripts/assert-plan-resume.ps1`.
+- После каждой фазы Codex обновляет план и детерминированный индекс.
+- Завершение требует закрытых критериев, проверок, `result_refs` и knowledge closeout. Completed plan не открывается повторно.
+
+```text
+Используй $project-delivery для задачи <ЗАДАЧА> с task key <TASK_KEY>. До любых
+изменений создай или найди ровно один active Plan v2, покажи его ID и путь. Веди
+реализацию по фазам и после каждой обновляй Resume checkpoint и проверки.
+```
+
+Для новой работы используй [`Plan and deliver`](prompts/plan-and-deliver.md), для возобновления - [`Continue plan`](prompts/continue-plan.md) с точным `<PLAN_REF>`.
+
+## Как начинать работу с кодом
+
+Шаблон намеренно не создает заранее `src/`, `app/`, `tests/`, `infra/` и конфиги конкретного стека. После выбора технологии Codex создает только нужные stack-native каталоги, а затем фиксирует фактическую картину:
+
+- [`docs/architecture/`](docs/architecture/INDEX.md) - контекст системы, границы, компоненты, данные, интеграции, trust boundaries и deployment;
+- [`docs/codebase/`](docs/codebase/INDEX.md) - entrypoints, модули, команды run/build/test, conventions и технический долг;
+- [`docs/decisions/`](docs/decisions/README.md) - только устойчивые труднообратимые решения;
+- код и тесты - источник истины о текущем поведении.
+
+Read-only инвентаризацию запускай через [`Architecture and codebase inventory`](prompts/architecture-codebase-inventory.md). Реализацию feature или bugfix начинай через [`Feature/bugfix delivery`](prompts/feature-bugfix-delivery.md), который обязательно связывает работу с планом.
 
 ## Как создавать Local Mastery
 
-Baseline Mastery в [`mastery/researcher/`](mastery/researcher/INDEX.md) и [`mastery/analyst/`](mastery/analyst/INDEX.md) переносится вместе с шаблоном и не редактируется в продукте. Повторяемый project-specific метод создается только в [`mastery/local/`](mastery/local/INDEX.md).
+Baseline Researcher Mastery в [`mastery/researcher/`](mastery/researcher/INDEX.md) переносится вместе с шаблоном и не редактируется в продукте. Повторяемый project-specific метод создается только в [`mastery/local/`](mastery/local/INDEX.md).
 
 Безопасный lifecycle:
 
@@ -205,7 +208,7 @@ duplicates, conflicts и review_due. Создай метод из TEMPLATE.md, �
 | Skill | Назначение | Входит в новый проект |
 |---|---|---|
 | [`startup-researcher`](.agents/skills/startup-researcher/SKILL.md) | Исследование ниш, идей, перспективности и evidence | Да |
-| [`it-analysis`](.agents/skills/it-analysis/SKILL.md) | Business/system analysis, требования, процессы, модели, API и ТЗ | Да |
+| [`project-delivery`](.agents/skills/project-delivery/SKILL.md) | Обязательный Plan v2, реализация по фазам, проверки и closeout | Да |
 | [`knowledge-curator`](.agents/skills/knowledge-curator/SKILL.md) | Diff closeout, candidates, review и разрешенный promotion | Да |
 
 `bulletproof`, `frontend-design` и другие пользовательские/global skills могут быть доступны владельцу source template, но в consumer payload не входят.
@@ -223,7 +226,8 @@ duplicates, conflicts и review_due. Создай метод из TEMPLATE.md, �
 - `TEMPLATE-DISTRIBUTION.json` - provenance consumer payload;
 - `scripts/verify-structure.ps1` - структура, ссылки и semantic gates;
 - `scripts/verify-knowledge.ps1` - режимы, RAW, candidates, Mastery и history gates;
-- `scripts/verify-analysis.ps1` - analysis runs и canonical handoff;
+- `scripts/verify-plans.ps1` - обязательные планы, prompt policy и resume checkpoints;
+- `scripts/verify-canon.ps1` - product, business, architecture и codebase canon;
 - `scripts/update-knowledge-graph.ps1` - deterministic derived graph;
 - PowerShell scripts для локального bootstrap и инициализации GitHub Template;
 - Git как история состояний. Сеть, database и background daemon не требуются.
@@ -238,12 +242,13 @@ duplicates, conflicts и review_due. Создай метод из TEMPLATE.md, �
 Не меняй idea/ без отдельного разрешения. Верни decision и candidate IDs.
 ```
 
-Сформировать требования:
+Спланировать и реализовать изменение:
 
 ```text
-Используй $it-analysis. Создай bounded analysis run для функции <ФУНКЦИЯ>.
-Построй stakeholders, as-is/to-be, требования, NFR, traceability и независимый
-review. Canonical handoff не выполняй без моего отдельного подтверждения.
+Используй $project-delivery для задачи <ЗАДАЧА>. До первой предметной записи найди
+active plan с task key <TASK_KEY> или создай его через scripts/new-plan.ps1.
+Выполняй работу по фазам, после каждой обновляй Resume checkpoint и проверки.
+Не выполняй commit, push или promotion без отдельного разрешения.
 ```
 
 Проверить состояние:
@@ -267,10 +272,11 @@ message. Не выполняй stage, commit или push до моей отде�
 Основные read-only проверки:
 
 ```powershell
-pwsh -NoProfile -File .\scripts\verify-structure.ps1 -Mode Auto
-pwsh -NoProfile -File .\scripts\verify-knowledge.ps1 -Report
-pwsh -NoProfile -File .\scripts\verify-analysis.ps1 -Report
-pwsh -NoProfile -File .\scripts\update-knowledge-graph.ps1 -Mode Check
+pwsh -NoProfile -File ./scripts/verify-structure.ps1 -Mode Auto
+pwsh -NoProfile -File ./scripts/verify-plans.ps1
+pwsh -NoProfile -File ./scripts/verify-canon.ps1 -Report
+pwsh -NoProfile -File ./scripts/verify-knowledge.ps1 -Report
+pwsh -NoProfile -File ./scripts/update-knowledge-graph.ps1 -Mode Check
 ```
 
 Template materials распространяются по [MIT License](LICENSE) и сопровождаются [third-party notices](THIRD-PARTY-NOTICES.md) до инициализации. После setup эти файлы хранятся как `TEMPLATE-LICENSE.md` и `TEMPLATE-THIRD-PARTY-NOTICES.md`. Лицензия кода и материалов нового продукта намеренно не выбирается автоматически.

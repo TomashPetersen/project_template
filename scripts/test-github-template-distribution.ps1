@@ -4,6 +4,10 @@ param()
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $repositoryRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
+$platformPath = Join-Path $PSScriptRoot 'lib/ModelProject.Platform.psm1'
+Import-Module $platformPath -Force
+$nullDevice = Get-ModelProjectNullDevice
+$pathComparison = Get-ModelProjectPathComparison -Path ([System.IO.Path]::GetTempPath())
 $manifestPath = Join-Path $repositoryRoot '.template-manifest.json'
 $temporaryPrefix = 'ModelProjectDistributionHarness-'
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ($temporaryPrefix + [guid]::NewGuid().ToString('N'))
@@ -19,7 +23,7 @@ function Assert-TemporaryRoot {
     $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/')
     $systemTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
     $leaf = [System.IO.Path]::GetFileName($fullPath)
-    if (-not $fullPath.StartsWith($systemTemp + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or
+    if (-not $fullPath.StartsWith($systemTemp + [System.IO.Path]::DirectorySeparatorChar, $pathComparison) -or
         -not $leaf.StartsWith($temporaryPrefix, [System.StringComparison]::Ordinal)) {
         throw 'Disposable harness root не прошел safety gate.'
     }
@@ -42,11 +46,11 @@ function Copy-FileExact {
         [Parameter(Mandatory = $true)][string]$RelativePath
     )
 
-    $source = Join-Path $SourceRoot $RelativePath.Replace('/', '\')
+    $source = Join-Path $SourceRoot $RelativePath
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Harness source file отсутствует: $RelativePath"
     }
-    $destination = Join-Path $DestinationRoot $RelativePath.Replace('/', '\')
+    $destination = Join-Path $DestinationRoot $RelativePath
     $parent = Split-Path -Parent $destination
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -63,7 +67,7 @@ function Copy-TreeExact {
     New-Item -ItemType Directory -Path $DestinationRoot | Out-Null
     foreach ($directory in (Get-ChildItem -LiteralPath $SourceRoot -Directory -Recurse -Force)) {
         $relative = Get-RelativePath -Root $SourceRoot -FullPath $directory.FullName
-        New-Item -ItemType Directory -Path (Join-Path $DestinationRoot $relative.Replace('/', '\')) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $DestinationRoot $relative) -Force | Out-Null
     }
     foreach ($file in (Get-ChildItem -LiteralPath $SourceRoot -File -Recurse -Force)) {
         $relative = Get-RelativePath -Root $SourceRoot -FullPath $file.FullName
@@ -96,7 +100,7 @@ function Invoke-Git {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & $script:gitExe -c "safe.directory=$Root" -c 'core.hooksPath=NUL' -C $Root @Arguments 2>&1
+    $output = & $script:gitExe -c "safe.directory=$Root" -c "core.hooksPath=$script:nullDevice" -C $Root @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Disposable Git command failed: $($Arguments[0])"
     }
@@ -199,7 +203,7 @@ function Invoke-Initializer {
         '-ProjectName', 'Harness Product',
         '-ProjectSlug', 'harness-product',
         '-Description', 'Disposable distribution verification.',
-        '-Owner', 'Harness Owner'
+        '-Owner', 'harness-owner'
     )
 }
 
@@ -232,7 +236,7 @@ try {
         [System.Environment]::SetEnvironmentVariable([string]$entry.Name, $null, 'Process')
     }
     [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_NOSYSTEM', '1', 'Process')
-    [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'NUL', 'Process')
+    [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_GLOBAL', $nullDevice, 'Process')
     New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
     $manifest = (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8) | ConvertFrom-Json
     if ($manifest.template_version -isnot [string] -or [string]$manifest.template_version -cnotmatch '^\d+\.\d+\.\d+$') {
@@ -246,7 +250,7 @@ try {
         Copy-FileExact -SourceRoot $repositoryRoot -DestinationRoot $sourceRoot -RelativePath ([string]$relativePath)
     }
     foreach ($relativeDirectory in @($manifest.portable_empty_directories)) {
-        New-Item -ItemType Directory -Path (Join-Path $sourceRoot ([string]$relativeDirectory).Replace('/', '\')) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $sourceRoot ([string]$relativeDirectory)) -Force | Out-Null
     }
     Initialize-FixtureRepository -Root $sourceRoot -Branch 'source'
     Invoke-Git -Root $sourceRoot -Arguments @('remote', 'add', 'origin', $templateUrl) | Out-Null
@@ -265,16 +269,15 @@ try {
 
     $roundtripSource = New-ConsumerFixture -Name 'git-roundtrip-source'
     $roundtripClone = Join-Path $temporaryRoot 'git-roundtrip-clone'
-    & $gitExe -c 'core.hooksPath=NUL' clone --quiet --no-local $roundtripSource $roundtripClone
+    & $gitExe -c "core.hooksPath=$nullDevice" clone --quiet --no-local $roundtripSource $roundtripClone
     if ($LASTEXITCODE -ne 0) { throw 'Git roundtrip clone failed.' }
     $roundtripVerify = Invoke-ScriptProcess `
         -ScriptPath (Join-Path $roundtripClone 'scripts\verify-structure.ps1') `
         -Arguments @('-Root', $roundtripClone, '-Mode', 'DistributionTemplate')
-    $analysisMarkerExists = Test-Path -LiteralPath (Join-Path $roundtripClone 'analysis\runs\.gitkeep') -PathType Leaf
-    $researchMarkerExists = Test-Path -LiteralPath (Join-Path $roundtripClone 'research\runs\.gitkeep') -PathType Leaf
-    if ($roundtripVerify.ExitCode -ne 0 -or -not $analysisMarkerExists -or -not $researchMarkerExists) {
+    $researchMarkerExists = Test-Path -LiteralPath (Join-Path $roundtripClone 'research/runs/.gitkeep') -PathType Leaf
+    if ($roundtripVerify.ExitCode -ne 0 -or -not $researchMarkerExists) {
         $safeDiagnostic = (($roundtripVerify.Stdout + "`n" + $roundtripVerify.Stderr).Replace($temporaryRoot, '[temp]')).Trim()
-        throw "Git roundtrip failed: verify-exit=$($roundtripVerify.ExitCode), analysis-marker=$analysisMarkerExists, research-marker=$researchMarkerExists, diagnostic=$safeDiagnostic"
+        throw "Git roundtrip failed: verify-exit=$($roundtripVerify.ExitCode), research-marker=$researchMarkerExists, diagnostic=$safeDiagnostic"
     }
     Add-Pass 'committed consumer survives real Git clone with required run roots'
 
@@ -332,7 +335,7 @@ try {
         Copy-FileExact -SourceRoot $repositoryRoot -DestinationRoot $ignoredSourceRoot -RelativePath ([string]$relativePath)
     }
     foreach ($relativeDirectory in @($manifest.portable_empty_directories)) {
-        New-Item -ItemType Directory -Path (Join-Path $ignoredSourceRoot ([string]$relativeDirectory).Replace('/', '\')) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $ignoredSourceRoot ([string]$relativeDirectory)) -Force | Out-Null
     }
     $ignoredManifestPath = Join-Path $ignoredSourceRoot '.template-manifest.json'
     $ignoredManifest = (Get-Content -Raw -LiteralPath $ignoredManifestPath -Encoding UTF8) | ConvertFrom-Json

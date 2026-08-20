@@ -7,7 +7,7 @@ param(
     [string]$Type,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet('idea', 'business', 'architecture', 'operations', 'research', 'mastery', 'instructions')]
+    [ValidateSet('idea', 'product', 'business', 'architecture', 'codebase', 'operations', 'research', 'mastery', 'instructions')]
     [string]$Domain,
 
     [Parameter(Mandatory = $true)]
@@ -29,7 +29,7 @@ param(
     [string]$Confidence,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet('repo-derived', 'explicit-user-capture', 'research-derived')]
+    [ValidateSet('repo-derived', 'explicit-user-capture', 'research-derived', 'plan-closeout')]
     [string]$CaptureBasis,
 
     [Parameter(Mandatory = $true)]
@@ -47,6 +47,12 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string]$ProposedChange,
+
+    [string]$MethodKind = '',
+
+    [string]$MethodSummary = '',
+
+    [string[]]$MethodAppliesTo = @(),
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -100,7 +106,7 @@ $maxTextFileBytes = 4MB
 $maxTextCorpusBytes = 128MB
 $maxTextFiles = 10000
 $utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
-$script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$script:textReadPaths = $null
 $script:textReadCorpusBytes = [long]0
 $candidateFields = @(
     'id',
@@ -122,6 +128,12 @@ $candidateFields = @(
     'dismiss_reason',
     'supersedes'
 )
+$candidateOptionalMethodFields = @(
+    'method_kind',
+    'method_summary',
+    'method_applies_to'
+)
+$candidateAllowedFields = @($candidateFields + $candidateOptionalMethodFields)
 $candidateScalarFields = @(
     'id',
     'state',
@@ -140,6 +152,7 @@ $candidateScalarFields = @(
     'dismiss_reason',
     'supersedes'
 )
+$candidateOptionalMethodScalarFields = @('method_kind', 'method_summary')
 $candidateNullableScalarFields = @(
     'review_due',
     'applied_at',
@@ -187,14 +200,27 @@ if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
     throw "Корень репозитория не найден: $Root"
 }
 $rootPath = (Resolve-Path -LiteralPath $Root).Path.TrimEnd([char[]]'\/')
+$script:candidatePathComparison = if (
+    [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows
+    )
+) {
+    [System.StringComparison]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparison]::Ordinal
+}
 
 function Test-PathWithinRoot {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
     $full = [System.IO.Path]::GetFullPath($AbsolutePath)
     return (
-        $full.Equals($rootPath, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $full.StartsWith($rootPath + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+        $full.Equals($rootPath, $script:candidatePathComparison) -or
+        $full.StartsWith(
+            $rootPath + [System.IO.Path]::DirectorySeparatorChar,
+            $script:candidatePathComparison
+        )
     )
 }
 
@@ -212,7 +238,7 @@ function Get-ReparsePointInPath {
         }
     }
 
-    $relative = if ($full.Equals($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $relative = if ($full.Equals($rootPath, $script:candidatePathComparison)) {
         ''
     }
     else {
@@ -261,13 +287,71 @@ $trustedKnowledgeModulePath = [System.IO.Path]::GetFullPath(
     [System.IO.Path]::Combine($trustedKnowledgeLibRoot, 'ModelProject.Knowledge.psm1')
 )
 $knowledgeModuleIntegrityError = 'Trusted knowledge helper module failed integrity/load check.'
+$trustedPlatformModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedKnowledgeLibRoot, 'ModelProject.Platform.psm1')
+)
+if (-not [System.IO.File]::Exists($trustedPlatformModulePath) -or
+    $null -ne (Get-ReparsePointInFullChain $trustedPlatformModulePath) -or
+    @([System.IO.Directory]::EnumerateFiles($trustedKnowledgeLibRoot) | Where-Object {
+        [System.IO.Path]::GetFileName($_) -ceq 'ModelProject.Platform.psm1'
+    }).Count -ne 1) {
+    throw $knowledgeModuleIntegrityError
+}
+try {
+    $trustedPlatformModule = Microsoft.PowerShell.Core\Import-Module `
+        -Name $trustedPlatformModulePath `
+        -Scope Local `
+        -Force `
+        -PassThru `
+        -ErrorAction Stop
+}
+catch { throw $knowledgeModuleIntegrityError }
+if ($null -eq $trustedPlatformModule -or
+    -not [System.IO.Path]::GetFullPath([string]$trustedPlatformModule.Path).Equals(
+        $trustedPlatformModulePath,
+        $script:candidatePathComparison
+    )) {
+    throw $knowledgeModuleIntegrityError
+}
+$trustedPlatformCommands = @{}
+foreach ($commandName in @(
+    'Get-ModelProjectGitExecutable', 'Get-ModelProjectNullDevice', 'Invoke-ModelProjectProcess',
+    'Enter-ModelProjectFileLock', 'Exit-ModelProjectFileLock', 'Get-ModelProjectPathComparison',
+    'Get-ModelProjectPowerShellHost'
+)) {
+    $command = $trustedPlatformModule.ExportedCommands[$commandName]
+    if ($null -eq $command -or $null -eq $command.Module -or
+        -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals(
+            $trustedPlatformModulePath,
+            $script:candidatePathComparison
+        )) {
+        throw $knowledgeModuleIntegrityError
+    }
+    $trustedPlatformCommands[$commandName] = $command
+}
+$script:mppGetGitExecutable = $trustedPlatformCommands['Get-ModelProjectGitExecutable']
+$script:mppGetNullDevice = $trustedPlatformCommands['Get-ModelProjectNullDevice']
+$script:mppInvokeProcess = $trustedPlatformCommands['Invoke-ModelProjectProcess']
+$script:mppEnterLock = $trustedPlatformCommands['Enter-ModelProjectFileLock']
+$script:mppExitLock = $trustedPlatformCommands['Exit-ModelProjectFileLock']
+$script:mppGetPathComparison = $trustedPlatformCommands['Get-ModelProjectPathComparison']
+$script:mppGetPowerShellHost = $trustedPlatformCommands['Get-ModelProjectPowerShellHost']
+$script:nullDevice = & $script:mppGetNullDevice
+$script:candidatePathComparison = & $script:mppGetPathComparison -Path $rootPath
+$pathComparer = if ($script:candidatePathComparison -eq [System.StringComparison]::OrdinalIgnoreCase) {
+    [System.StringComparer]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparer]::Ordinal
+}
+$script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($pathComparer)
 if (-not [System.IO.Path]::GetDirectoryName($trustedKnowledgeLibRoot).Equals(
         $trustedKnowledgeScriptsRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:candidatePathComparison
     ) -or
     -not [System.IO.Path]::GetDirectoryName($trustedKnowledgeModulePath).Equals(
         $trustedKnowledgeLibRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:candidatePathComparison
     ) -or
     -not [System.IO.Directory]::Exists($trustedKnowledgeLibRoot) -or
     -not [System.IO.File]::Exists($trustedKnowledgeModulePath) -or
@@ -308,13 +392,15 @@ if ($trustedKnowledgeModules.Count -ne 1 -or
     [string]::IsNullOrWhiteSpace([string]$trustedKnowledgeModules[0].Path) -or
     -not [System.IO.Path]::GetFullPath([string]$trustedKnowledgeModules[0].Path).Equals(
         $trustedKnowledgeModulePath,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:candidatePathComparison
     )) {
     throw $knowledgeModuleIntegrityError
 }
 $trustedKnowledgeModule = $trustedKnowledgeModules[0]
 $trustedKnowledgeExportNames = @(
     'Test-ModelProjectFrontMatterScalarValue',
+    'ConvertFrom-ModelProjectSimpleYamlScalar',
+    'Read-ModelProjectSimpleFrontMatterDocument',
     'Test-ModelProjectJsonScalar',
     'ConvertTo-ModelProjectPercentDecodedText',
     'Get-ModelProjectHttpsUrlSafetyFinding',
@@ -346,7 +432,7 @@ foreach ($commandName in $trustedKnowledgeExportNames) {
         [string]::IsNullOrWhiteSpace([string]$command.Module.Path) -or
         -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals(
             $trustedKnowledgeModulePath,
-            [System.StringComparison]::OrdinalIgnoreCase
+            $script:candidatePathComparison
         )) {
         throw $knowledgeModuleIntegrityError
     }
@@ -533,7 +619,7 @@ function Test-ExactPathCase {
 
     $full = [System.IO.Path]::GetFullPath($AbsolutePath).TrimEnd([char[]]'\/')
     if (-not (Test-PathWithinRoot $full)) { return $false }
-    $relative = if ($full.Equals($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $relative = if ($full.Equals($rootPath, $script:candidatePathComparison)) {
         ''
     }
     else {
@@ -851,7 +937,7 @@ function Assert-SafeReference {
     }
 
     try {
-        $absolute = [System.IO.Path]::GetFullPath((Join-Path $rootPath $decodedPath.Replace('/', '\')))
+        $absolute = [System.IO.Path]::GetFullPath((Join-Path $rootPath $decodedPath))
     }
     catch {
         throw "$Field содержит путь, который невозможно нормализовать."
@@ -885,39 +971,19 @@ function Get-Sha256Hex {
     }
 }
 
-function Get-ClaimMutexName {
+function Get-ClaimLockResourceKey {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)][string]$NormalizedClaimKey
     )
 
-    $canonicalRoot = [System.IO.Path]::GetFullPath($RepositoryRoot).
-        TrimEnd([char[]]'\/').
-        Replace('/', '\').
-        ToLowerInvariant()
-    $lockIdentity = $canonicalRoot + "`n" + $NormalizedClaimKey
-    return 'Local\ModelProjectKnowledgeCandidate-' + (Get-Sha256Hex $lockIdentity)
+    $null = $RepositoryRoot
+    return 'candidate-' + (Get-Sha256Hex $NormalizedClaimKey)
 }
 
 function Get-TrustedGitExecutable {
-    $gitCommand = Get-Command -Name 'git.exe' -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $gitCommand) {
-        $gitCommand = Get-Command -Name 'git' -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-    }
-    if ($null -eq $gitCommand -or [string]::IsNullOrWhiteSpace([string]$gitCommand.Source)) {
-        throw 'blocked: missing-git-baseline'
-    }
-
-    $gitPath = [System.IO.Path]::GetFullPath([string]$gitCommand.Source)
-    if ([System.IO.Path]::GetFileName($gitPath) -cnotin @('git.exe', 'git') -or
-        -not (Test-Path -LiteralPath $gitPath -PathType Leaf) -or
-        $null -ne (Get-ReparsePointInFullChain $gitPath) -or
-        (Test-PathWithinRoot $gitPath)) {
-        throw 'blocked: missing-git-baseline'
-    }
-    return $gitPath
+    try { return (& $script:mppGetGitExecutable -ControlledRoots @($rootPath)) }
+    catch { throw 'blocked: missing-git-baseline' }
 }
 
 function Get-TrustedGitMetadata {
@@ -990,7 +1056,7 @@ function Get-TrustedGitMetadata {
         }
         if (-not $backlinkTarget.Equals(
                 [System.IO.Path]::GetFullPath($gitMetadataPath),
-                [System.StringComparison]::OrdinalIgnoreCase
+                $script:candidatePathComparison
             )) {
             return $null
         }
@@ -1019,79 +1085,23 @@ function Invoke-TrustedGitCommand {
         [long]$MaxCharacters = 0
     )
 
-    $savedGitEnvironment = @{}
-    foreach ($name in @([System.Environment]::GetEnvironmentVariables('Process').Keys)) {
-        if ([string]$name -and [string]$name.StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $savedGitEnvironment[[string]$name] = [string][System.Environment]::GetEnvironmentVariable(
-                [string]$name,
-                'Process'
-            )
-        }
-    }
-    $previousErrorActionPreference = $ErrorActionPreference
-    $previousConsoleOutputEncoding = [Console]::OutputEncoding
-    $previousOutputEncoding = $OutputEncoding
-    try {
-        foreach ($name in @($savedGitEnvironment.Keys)) {
-            [System.Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
-        }
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_NOSYSTEM', '1', 'Process')
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_SYSTEM', 'NUL', 'Process')
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'NUL', 'Process')
-        $ErrorActionPreference = 'Continue'
-        [Console]::OutputEncoding = $utf8NoBom
-        $OutputEncoding = $utf8NoBom
-        $gitArguments = @(
-            "--git-dir=$([string]$Metadata.GitDirectory)",
-            "--work-tree=$([string]$Metadata.WorkTree)",
-            '-c', 'core.fsmonitor=false',
-            '-c', 'core.hooksPath=NUL',
-            '-c', 'core.quotePath=false'
-        ) + @($Arguments)
-        $lines = [System.Collections.Generic.List[string]]::new()
-        [long]$characterCount = 0
-        $limitExceeded = $false
-        try {
-            & $GitPath @gitArguments 2>$null | ForEach-Object {
-                $line = [string]$_
-                $nextCharacterCount = $characterCount + $line.Length
-                if ($lines.Count -gt 0) { $nextCharacterCount++ }
-                if (($MaxLines -gt 0 -and ($lines.Count + 1) -gt $MaxLines) -or
-                    ($MaxCharacters -gt 0 -and $nextCharacterCount -gt $MaxCharacters)) {
-                    $limitExceeded = $true
-                    throw 'trusted-git-output-limit'
-                }
-                $lines.Add($line) | Out-Null
-                $characterCount = $nextCharacterCount
-            }
-            $exitCode = $LASTEXITCODE
-        }
-        catch {
-            if (-not $limitExceeded) { throw }
-            $exitCode = 1
-        }
-        return [pscustomobject]@{
-            ExitCode = $exitCode
-            Lines = @($lines)
-            LimitExceeded = $limitExceeded
-        }
-    }
-    finally {
-        [Console]::OutputEncoding = $previousConsoleOutputEncoding
-        $OutputEncoding = $previousOutputEncoding
-        $ErrorActionPreference = $previousErrorActionPreference
-        foreach ($name in @([System.Environment]::GetEnvironmentVariables('Process').Keys)) {
-            if ([string]$name -and [string]$name.StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-                [System.Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
-            }
-        }
-        foreach ($name in @($savedGitEnvironment.Keys)) {
-            [System.Environment]::SetEnvironmentVariable(
-                [string]$name,
-                [string]$savedGitEnvironment[$name],
-                'Process'
-            )
-        }
+    $gitArguments = @(
+        "--git-dir=$([string]$Metadata.GitDirectory)",
+        "--work-tree=$([string]$Metadata.WorkTree)",
+        '-c', 'core.fsmonitor=false',
+        '-c', "core.hooksPath=$script:nullDevice",
+        '-c', 'core.quotePath=false'
+    ) + @($Arguments)
+    $result = & $script:mppInvokeProcess `
+        -Executable $GitPath `
+        -Arguments $gitArguments `
+        -GitEnvironment `
+        -MaxLines $MaxLines `
+        -MaxCharacters $MaxCharacters
+    return [pscustomobject]@{
+        ExitCode = $result.ExitCode
+        Lines = @($result.StdoutLines)
+        LimitExceeded = $result.LimitExceeded
     }
 }
 
@@ -1134,7 +1144,7 @@ function Assert-AuthorityContract {
 
     try {
         Assert-SafeReference -Value $AuthorityRef -Field 'AuthorityRef' -MustExist
-        $authorityPath = Join-Path $rootPath $AuthorityRef.Replace('/', '\')
+        $authorityPath = Join-Path $rootPath $AuthorityRef
         $authorityData = Read-SimpleFrontMatter $authorityPath
         if (-not $authorityData.ContainsKey('artifact_kind') -or
             [string]$authorityData.artifact_kind -cne 'decision' -or
@@ -1184,10 +1194,15 @@ function Test-ExistingCandidateRequestMatch {
         if (-not $Data.ContainsKey($field)) { return $false }
     }
     foreach ($field in @($Data.Keys)) {
-        if ($field -cnotin $candidateFields) { return $false }
+        if ($field -cnotin $candidateAllowedFields) { return $false }
     }
-    foreach ($field in $candidateScalarFields) {
+    foreach ($field in @($candidateScalarFields + $candidateOptionalMethodScalarFields)) {
+        if (-not $Data.ContainsKey($field)) {
+            if ($Type -ceq 'method') { return $false }
+            continue
+        }
         $allowNull = $field -cin $candidateNullableScalarFields
+        if ($field -cin $candidateOptionalMethodScalarFields) { $allowNull = $true }
         if (-not (& $script:mpkTestFrontMatterScalarValue -Value $Data[$field] -AllowNull:$allowNull)) {
             return $false
         }
@@ -1212,8 +1227,14 @@ function Test-ExistingCandidateRequestMatch {
         capture_basis = $CaptureBasis
         data_class = $DataClass
         review_due = $expectedReviewDue
+        method_kind = $(if ($Type -ceq 'method') { $MethodKind } else { $null })
+        method_summary = $(if ($Type -ceq 'method') { $MethodSummary } else { $null })
     }
     foreach ($entry in $expectedScalars.GetEnumerator()) {
+        if (-not $Data.ContainsKey($entry.Key) -and $Type -cne 'method' -and
+            $entry.Key -cin $candidateOptionalMethodScalarFields) {
+            continue
+        }
         if ($null -eq $entry.Value) {
             if ($null -ne $Data[$entry.Key]) { return $false }
         }
@@ -1224,8 +1245,13 @@ function Test-ExistingCandidateRequestMatch {
 
     foreach ($arrayContract in @(
         [pscustomobject]@{ Name = 'source_refs'; Expected = @($SourceRefs | ForEach-Object { [string]$_ }) },
-        [pscustomobject]@{ Name = 'conflict_refs'; Expected = @($ConflictRefs | ForEach-Object { [string]$_ }) }
+        [pscustomobject]@{ Name = 'conflict_refs'; Expected = @($ConflictRefs | ForEach-Object { [string]$_ }) },
+        [pscustomobject]@{ Name = 'method_applies_to'; Expected = @($MethodAppliesTo | ForEach-Object { [string]$_ }) }
     )) {
+        if (-not $Data.ContainsKey($arrayContract.Name) -and $Type -cne 'method' -and
+            $arrayContract.Name -ceq 'method_applies_to') {
+            continue
+        }
         $actual = $Data[$arrayContract.Name]
         if (-not ($actual -is [System.Array])) { return $false }
         $actualValues = @($actual)
@@ -1339,6 +1365,41 @@ function Convert-ToYamlScalar {
     return "'" + $Value.Replace("'", "''") + "'"
 }
 
+function Get-AllowedMasteryIntentIds {
+    $catalogPath = Join-Path $rootPath 'mastery/INTENTS.json'
+    if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf) -or
+        -not (Test-ExactPathCase $catalogPath) -or
+        $null -ne (Get-ReparsePointInPath $catalogPath)) {
+        throw 'mastery/INTENTS.json отсутствует или не прошел path integrity check.'
+    }
+    $catalogText = Read-BoundedUtf8Text -FilePath $catalogPath -Context 'mastery intent catalog'
+    try {
+        $catalog = $catalogText | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw 'mastery/INTENTS.json содержит некорректный JSON.'
+    }
+    if ($null -eq $catalog -or $catalog -is [System.Array] -or
+        ((@($catalog.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'intents,schema_version') -or
+        [string]$catalog.schema_version -cne '1' -or
+        -not ($catalog.intents -is [System.Array]) -or
+        @($catalog.intents).Count -eq 0) {
+        throw 'mastery/INTENTS.json не соответствует catalog contract v1.'
+    }
+    $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($intent in @($catalog.intents)) {
+        if ($null -eq $intent -or $intent -is [System.Array] -or
+            ((@($intent.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'description,id,label')) {
+            throw 'mastery/INTENTS.json содержит intent с неизвестной схемой.'
+        }
+        $intentId = [string]$intent.id
+        if ($intentId -cnotmatch '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$' -or -not $ids.Add($intentId)) {
+            throw 'mastery/INTENTS.json содержит invalid или duplicate intent id.'
+        }
+    }
+    return $ids
+}
+
 function Assert-RenderedCandidate {
     param(
         [Parameter(Mandatory = $true)][string]$Content,
@@ -1352,6 +1413,9 @@ function Assert-RenderedCandidate {
         [Parameter(Mandatory = $true)][string]$ExpectedConfidence,
         [Parameter(Mandatory = $true)][string]$ExpectedCaptureBasis,
         [Parameter(Mandatory = $true)][string]$ExpectedDataClass,
+        [AllowNull()][string]$ExpectedMethodKind,
+        [AllowNull()][string]$ExpectedMethodSummary,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ExpectedMethodAppliesTo,
         [Parameter(Mandatory = $true)][string]$ExpectedCreatedAt,
         [AllowNull()][string]$ExpectedReviewDue,
         [Parameter(Mandatory = $true)][string]$ExpectedAuthorityRef,
@@ -1365,15 +1429,21 @@ function Assert-RenderedCandidate {
             throw "Rendered candidate не содержит обязательное поле '$field'."
         }
     }
+    foreach ($field in $candidateOptionalMethodFields) {
+        if (-not $data.ContainsKey($field)) {
+            throw "Rendered candidate не содержит method-поле '$field'."
+        }
+    }
     foreach ($field in @($data.Keys)) {
-        if ($field -cnotin $candidateFields) {
+        if ($field -cnotin $candidateAllowedFields) {
             throw "Rendered candidate содержит неизвестное поле '$field'."
         }
     }
-    foreach ($field in $candidateScalarFields) {
+    foreach ($field in @($candidateScalarFields + $candidateOptionalMethodScalarFields)) {
         if (-not $data.ContainsKey($field)) { continue }
         $allowNull = $field -cin $candidateNullableScalarFields
-            if (-not (& $script:mpkTestFrontMatterScalarValue -Value $data[$field] -AllowNull:$allowNull)) {
+        if ($field -cin $candidateOptionalMethodScalarFields) { $allowNull = $true }
+        if (-not (& $script:mpkTestFrontMatterScalarValue -Value $data[$field] -AllowNull:$allowNull)) {
             $expectedKind = if ($allowNull) { 'YAML scalar или null' } else { 'YAML scalar' }
             throw "Rendered candidate field '$field' должен быть $expectedKind."
         }
@@ -1390,6 +1460,8 @@ function Assert-RenderedCandidate {
         confidence = $ExpectedConfidence
         capture_basis = $ExpectedCaptureBasis
         data_class = $ExpectedDataClass
+        method_kind = $ExpectedMethodKind
+        method_summary = $ExpectedMethodSummary
         created_at = $ExpectedCreatedAt
         review_due = $ExpectedReviewDue
         authority_ref = $ExpectedAuthorityRef
@@ -1411,7 +1483,8 @@ function Assert-RenderedCandidate {
 
     foreach ($arrayContract in @(
         [pscustomobject]@{ Name = 'source_refs'; Expected = @($ExpectedSourceRefs) },
-        [pscustomobject]@{ Name = 'conflict_refs'; Expected = @($ExpectedConflictRefs) }
+        [pscustomobject]@{ Name = 'conflict_refs'; Expected = @($ExpectedConflictRefs) },
+        [pscustomobject]@{ Name = 'method_applies_to'; Expected = @($ExpectedMethodAppliesTo) }
     )) {
         $actual = $data[$arrayContract.Name]
         if (-not ($actual -is [System.Array])) {
@@ -1466,7 +1539,7 @@ function Assert-TrustedKnowledgePreflight {
     $verifierPath = [System.IO.Path]::GetFullPath((Join-Path $trustedScriptRoot 'verify-knowledge.ps1'))
     if (-not (Split-Path -Parent $verifierPath).Equals(
         $trustedScriptRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:candidatePathComparison
     )) {
         throw 'Trusted knowledge verifier вышел за каталог scripts.'
     }
@@ -1479,33 +1552,20 @@ function Assert-TrustedKnowledgePreflight {
         throw 'Trusted knowledge verifier не прошел path integrity check.'
     }
 
-    $hostPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    if ([string]::IsNullOrWhiteSpace($hostPath)) {
-        throw 'Не удалось определить exact PowerShell host path.'
-    }
-    $hostPath = [System.IO.Path]::GetFullPath($hostPath)
-    if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf) -or
-        $null -ne (Get-ReparsePointInFullChain $hostPath) -or
-        (Test-PathWithinRoot $hostPath)) {
-        throw 'Exact PowerShell host path не прошел integrity check.'
-    }
-    $hostName = [System.IO.Path]::GetFileName($hostPath)
-    if ($hostName -cnotin @('powershell.exe', 'pwsh.exe')) {
-        throw 'Текущий процесс не является поддерживаемым PowerShell host.'
-    }
+    try { $hostPath = & $script:mppGetPowerShellHost -ControlledRoots @($rootPath) }
+    catch { throw 'Exact PowerShell host path не прошел integrity check.' }
 
-    $preflightOutput = @(
-        & $hostPath `
-            -NoLogo `
-            -NoProfile `
-            -NonInteractive `
-            -ExecutionPolicy Bypass `
-            -File $verifierPath `
-            -Root $rootPath 2>&1
-    )
-    $preflightExitCode = $LASTEXITCODE
-    $preflightOutput = $null
-    if ($preflightExitCode -ne 0) {
+    $preflight = & $script:mppInvokeProcess `
+        -Executable $hostPath `
+        -Arguments @(
+            '-NoLogo', '-NoProfile', '-NonInteractive',
+            '-File', $verifierPath,
+            '-Root', $rootPath
+        ) `
+        -WorkingDirectory $rootPath `
+        -MaxLines 5000 `
+        -MaxCharacters 8MB
+    if ($preflight.LimitExceeded -or $preflight.ExitCode -ne 0) {
         throw 'blocked: repository-preflight'
     }
 }
@@ -1574,6 +1634,37 @@ Assert-SafeCandidateText -Value $Title -Field 'Title' -SingleLine
 Assert-SafeCandidateText -Value $Basis -Field 'Basis'
 Assert-SafeCandidateText -Value $ProposedChange -Field 'ProposedChange'
 Assert-SafeCandidateText -Value $DuplicateCheck -Field 'DuplicateCheck'
+$MethodKind = $MethodKind.Trim()
+$MethodSummary = $MethodSummary.Trim()
+$MethodAppliesTo = @($MethodAppliesTo | ForEach-Object { ([string]$_).Trim() })
+if ($Type -ceq 'method') {
+    if ($MethodKind -cnotin @('heuristic', 'checklist', 'workflow', 'standard')) {
+        throw 'Method candidate требует MethodKind heuristic, checklist, workflow или standard.'
+    }
+    Assert-SafeCandidateText -Value $MethodSummary -Field 'MethodSummary' -SingleLine
+    if ($MethodSummary.Length -gt 160 -or $MethodSummary -match '[<>\[\]|]') {
+        throw 'MethodSummary содержит запрещенные символы или превышает лимит 160 символов.'
+    }
+    if ($Title -cnotmatch '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()/_+\-]{0,119}$') {
+        throw 'Method Title не соответствует безопасному однострочному формату.'
+    }
+    if ($MethodAppliesTo.Count -eq 0 -or
+        @($MethodAppliesTo | Sort-Object -Unique -CaseSensitive).Count -ne $MethodAppliesTo.Count) {
+        throw 'Method candidate требует непустой MethodAppliesTo без дублей.'
+    }
+    $allowedIntentIds = Get-AllowedMasteryIntentIds
+    foreach ($intentId in $MethodAppliesTo) {
+        if ($intentId -cnotmatch '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$' -or
+            -not $allowedIntentIds.Contains($intentId)) {
+            throw 'MethodAppliesTo содержит intent вне mastery/INTENTS.json.'
+        }
+    }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($MethodKind) -or
+    -not [string]::IsNullOrWhiteSpace($MethodSummary) -or
+    $MethodAppliesTo.Count -gt 0) {
+    throw 'Method-поля допустимы только для Type method.'
+}
 if ($TargetRef -cmatch '^logical:shared-mastery/') {
     throw 'blocked: shared-owner'
 }
@@ -1582,7 +1673,7 @@ $targetPathPart = $TargetRef.Split('#', 2)[0]
 if ([System.IO.Path]::GetExtension($targetPathPart) -cne '.md') {
     throw 'TargetRef должен указывать на канонический Markdown-файл.'
 }
-if ($targetPathPart -match '^(?:knowledge/candidates|research/runs|analysis/runs|inbox/raw|business/raw|plans|retrospectives)(?:/|$)') {
+if ($targetPathPart -match '^(?:knowledge/candidates|research/runs|analysis/runs|inbox/raw|plans|retrospectives)(?:/|$)') {
     throw "TargetRef указывает в рабочую или RAW-зону, а не в канон: $TargetRef"
 }
 
@@ -1593,6 +1684,9 @@ if (@($normalizedSources | Sort-Object -Unique).Count -ne $normalizedSources.Cou
 }
 foreach ($sourceRef in $normalizedSources) {
     Assert-SafeReference -Value $sourceRef -Field 'SourceRefs' -AllowExternal -AllowLogical -MustExist
+}
+if ($CaptureBasis -ceq 'plan-closeout' -and @($normalizedSources | Where-Object { $_ -match '^plans/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md(?:#.+)?$' }).Count -eq 0) {
+    throw 'plan-closeout candidate требует source_ref на Plan v2.'
 }
 
 $normalizedConflicts = @($ConflictRefs | ForEach-Object { [string]$_ })
@@ -1640,11 +1734,11 @@ if ($Type -ceq 'method') {
             $sourcePath -notmatch '(?:^|/)(?:README|INDEX|TEMPLATE)\.md$') {
             $hasProjectSource = $true
         }
-        if ($sourcePath -match '^analysis/runs/(?<run>[^/]+)/decision\.md$') {
-            [void]$taskSourceIdentities.Add('analysis:' + [string]$Matches['run'])
-        }
-        elseif ($sourcePath -match '^research/runs/(?<run>[^/]+)/decision\.md$') {
+        if ($sourcePath -match '^research/runs/(?<run>[^/]+)/decision\.md$') {
             [void]$taskSourceIdentities.Add('research:' + [string]$Matches['run'])
+        }
+        elseif ($sourcePath -match '^plans/(?<task>\d{4}-\d{2}-\d{2}-[^/]+)\.md$') {
+            [void]$taskSourceIdentities.Add('plan:' + [string]$Matches['task'])
         }
         elseif ($sourcePath -match '^retrospectives/(?<task>[^/]+)\.md$') {
             [void]$taskSourceIdentities.Add('retrospective:' + [string]$Matches['task'])
@@ -1660,7 +1754,7 @@ if ($Type -ceq 'method') {
     }
 }
 
-$candidateRoot = Join-Path $rootPath 'knowledge\candidates'
+$candidateRoot = [System.IO.Path]::Combine($rootPath, 'knowledge', 'candidates')
 $knownCandidateIds = @{}
 $existingClaimCandidate = $null
     if (Test-Path -LiteralPath $candidateRoot) {
@@ -1690,7 +1784,7 @@ $existingClaimCandidate = $null
 }
 
 $knownEvidenceIds = @{}
-$researchRuns = Join-Path $rootPath 'research\runs'
+$researchRuns = [System.IO.Path]::Combine($rootPath, 'research', 'runs')
 if (Test-Path -LiteralPath $researchRuns -PathType Container) {
     $researchReparse = Get-ReparsePointInPath $researchRuns
     if ($null -ne $researchReparse) {
@@ -1835,7 +1929,11 @@ for ($attempt = 0; $attempt -lt 16; $attempt++) {
     }
     $suffix = ([System.BitConverter]::ToString($randomBytes)).Replace('-', '').ToLowerInvariant()
     $candidateId = 'KC-{0}-{1}-{2}' -f $now.ToString('yyyyMMdd'), $now.ToString('HHmmss'), $suffix
-    $candidatePath = Join-Path $candidateRoot ("{0}\{1}.md" -f $now.ToString('yyyy'), $candidateId)
+    $candidatePath = [System.IO.Path]::Combine(
+        $candidateRoot,
+        $now.ToString('yyyy'),
+        "$candidateId.md"
+    )
     if (Test-Path -LiteralPath $candidatePath) { continue }
 
     $reviewDueYaml = if ([string]::IsNullOrWhiteSpace($ReviewDue)) { 'null' } else { Convert-ToYamlScalar $ReviewDue }
@@ -1848,6 +1946,12 @@ for ($attempt = 0; $attempt -lt 16; $attempt++) {
     else {
         "`n" + (($normalizedConflicts | ForEach-Object { '  - ' + (Convert-ToYamlScalar $_) }) -join "`n")
     }
+    $methodKindYaml = if ($Type -ceq 'method') { Convert-ToYamlScalar $MethodKind } else { 'null' }
+    $methodSummaryYaml = if ($Type -ceq 'method') { Convert-ToYamlScalar $MethodSummary } else { 'null' }
+    $methodAppliesYaml = if ($Type -ceq 'method') {
+        "`n" + (($MethodAppliesTo | ForEach-Object { '  - ' + (Convert-ToYamlScalar $_) }) -join "`n")
+    }
+    else { '[]' }
 
     $content = @"
 ---
@@ -1856,6 +1960,9 @@ state: ready
 type: $Type
 owner_scope: project
 domain: $Domain
+method_kind: $methodKindYaml
+method_summary: $methodSummaryYaml
+method_applies_to: $methodAppliesYaml
 claim_key: $(Convert-ToYamlScalar $ClaimKey)
 target_ref: $(Convert-ToYamlScalar $TargetRef)
 source_refs:
@@ -1914,6 +2021,9 @@ Candidate ожидает review или explicit promotion в $TargetRef. Осн�
         -ExpectedConfidence $Confidence `
         -ExpectedCaptureBasis $CaptureBasis `
         -ExpectedDataClass $DataClass `
+        -ExpectedMethodKind $(if ($Type -ceq 'method') { $MethodKind } else { $null }) `
+        -ExpectedMethodSummary $(if ($Type -ceq 'method') { $MethodSummary } else { $null }) `
+        -ExpectedMethodAppliesTo $MethodAppliesTo `
         -ExpectedCreatedAt $createdAtValue `
         -ExpectedReviewDue $reviewDueValue `
         -ExpectedAuthorityRef $AuthorityRef `
@@ -1988,31 +2098,23 @@ return [pscustomobject]@{
 }
 }
 
-$claimMutexName = Get-ClaimMutexName -RepositoryRoot $rootPath -NormalizedClaimKey $ClaimKey
-$claimMutex = $null
-$claimMutexAcquired = $false
+$claimLockResourceKey = Get-ClaimLockResourceKey -RepositoryRoot $rootPath -NormalizedClaimKey $ClaimKey
+$claimLock = $null
 $lockedResult = $null
 try {
-    $createdNew = $false
-    $claimMutex = [System.Threading.Mutex]::new($false, $claimMutexName, [ref]$createdNew)
     try {
-        $claimMutexAcquired = $claimMutex.WaitOne([System.TimeSpan]::FromSeconds(60))
+        $claimLock = & $script:mppEnterLock `
+            -RepositoryRoot $rootPath `
+            -ResourceKey $claimLockResourceKey `
+            -TimeoutSeconds 60
     }
-    catch [System.Threading.AbandonedMutexException] {
-        $claimMutexAcquired = $true
-    }
-    if (-not $claimMutexAcquired) {
+    catch {
         throw 'blocked: candidate-lock-timeout'
     }
     $lockedResult = Invoke-CandidateCreationLocked
 }
 finally {
-    if ($claimMutexAcquired -and $null -ne $claimMutex) {
-        $claimMutex.ReleaseMutex()
-    }
-    if ($null -ne $claimMutex) {
-        $claimMutex.Dispose()
-    }
+    if ($null -ne $claimLock) { & $script:mppExitLock -Lock $claimLock }
 }
 
 if ($null -ne $lockedResult -and

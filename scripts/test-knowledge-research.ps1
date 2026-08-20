@@ -676,18 +676,74 @@ function Add-LocalMethodFixture {
         [AllowNull()][string]$Supersedes = $null
     )
 
+    $candidateRoot = Join-Path $CaseRoot 'knowledge/candidates'
+    $candidateIdsBefore = @(
+        Get-ChildItem -LiteralPath $candidateRoot -Recurse -File -Filter 'KC-*.md' -Force |
+            ForEach-Object { $_.BaseName }
+    )
+    $candidateResult = Invoke-PowerShellChild `
+        -ScriptPath (Join-Path $CaseRoot 'scripts/new-knowledge-candidate.ps1') `
+        -Arguments @(
+            '-Root', $CaseRoot,
+            '-Type', 'method',
+            '-Domain', 'mastery',
+            '-ClaimKey', "method.$MethodId",
+            '-TargetRef', 'mastery/local/INDEX.md#зарегистрированные-расширения',
+            '-SourceRefs', 'PROJECT.md',
+            '-Confidence', 'high',
+            '-CaptureBasis', 'explicit-user-capture',
+            '-DataClass', 'internal',
+            '-Title', "Fixture method $MethodId",
+            '-Basis', 'Прямая fixture-коррекция подтверждает повторяемый исследовательский метод.',
+            '-ProposedChange', 'Проверять research evidence и критерий решения единым воспроизводимым способом.',
+            '-MethodKind', 'checklist',
+            '-MethodSummary', 'Проверяет research evidence и критерий решения перед завершением запуска.',
+            '-MethodAppliesTo', 'niche-discovery',
+            '-DuplicateCheck', 'Совпадающий fixture method отсутствует.',
+            '-ReviewDue', $ReviewDue,
+            '-AuthorityRef', "user-request:research-harness-$MethodId",
+            '-WriteIntent', 'explicit-promotion'
+        ) `
+        -WorkingDirectory $CaseRoot `
+        -Timeout $TimeoutSeconds
+    if ($candidateResult.TimedOut -or $candidateResult.StreamTimedOut -or $candidateResult.ExitCode -ne 0) {
+        throw "HARNESS-METHOD-CANDIDATE: $(Get-SafeChildSummary -Result $candidateResult -FixturePath $CaseRoot)"
+    }
+    $candidateFiles = @(
+        Get-ChildItem -LiteralPath $candidateRoot -Recurse -File -Filter 'KC-*.md' -Force |
+            Where-Object { $_.BaseName -cnotin $candidateIdsBefore }
+    )
+    if ($candidateFiles.Count -ne 1) {
+        throw "HARNESS-METHOD-CANDIDATE-COUNT: $($candidateFiles.Count)"
+    }
+    $candidatePath = $candidateFiles[0].FullName
+    $candidateRelative = [System.IO.Path]::GetRelativePath($CaseRoot, $candidatePath).Replace('\', '/')
+    $candidateText = [System.IO.File]::ReadAllText($candidatePath)
+    $createdAtMatch = [regex]::Match($candidateText, '(?m)^created_at:\s*(?<value>[^\r\n]+?)\s*$')
+    if (-not $createdAtMatch.Success) { throw 'HARNESS-METHOD-CANDIDATE-CREATED-AT' }
+    $candidateText = [regex]::Replace($candidateText, '(?m)^state: ready\s*$', 'state: applied')
+    $candidateText = [regex]::Replace(
+        $candidateText,
+        '(?m)^applied_at: null\s*$',
+        'applied_at: ' + $createdAtMatch.Groups['value'].Value
+    )
+    Write-Utf8BomFixture -Path $candidatePath -Content $candidateText
+
     $safeFileName = $MethodId + '.md'
     $methodPath = Join-Path $CaseRoot ('mastery\local\' + $safeFileName)
-    $supersedesValue = if ($null -eq $Supersedes) { 'null' } else { $Supersedes }
+    $supersedesValue = if ([string]::IsNullOrWhiteSpace($Supersedes)) { 'null' } else { $Supersedes }
     $content = @"
 ---
+mastery_contract_version: 2
 method_id: $MethodId
+method_kind: checklist
+summary: Проверяет research evidence и критерий решения перед завершением запуска.
 owner_scope: project
 applies_to:
   - niche-discovery
 status: $Status
 source_refs:
-  - PROJECT.md
+  - $candidateRelative
 verified_at: $VerifiedAt
 review_due: $ReviewDue
 supersedes: $supersedesValue
@@ -695,21 +751,48 @@ supersedes: $supersedesValue
 
 # Fixture method
 
-Use a deterministic source-only check for this synthetic research fixture.
+## Purpose
+
+Дать воспроизводимую проверку research evidence и критерия решения.
+
+## Use when
+
+Использовать для synthetic niche-discovery fixture.
+
+## Do not use when
+
+Не использовать вне bounded research run.
+
+## Inputs
+
+Research brief, evidence ledger и decision.
+
+## Workflow
+
+Сверить evidence, ограничения и критерий решения.
+
+## Quality gate
+
+Вывод поддержан точными evidence refs.
+
+## Failure modes
+
+При недостатке evidence вернуть blocked outcome.
+
+## Provenance
+
+Источник метода указан во frontmatter.
 "@
     Write-Utf8BomFixture -Path $methodPath -Content $content
 
-    $indexPath = Join-Path $CaseRoot 'mastery\local\INDEX.md'
-    $index = [System.IO.File]::ReadAllText($indexPath)
-    $registryRow = "| $MethodId | [Fixture method]($safeFileName) | niche-discovery | $VerifiedAt | $ReviewDue | $Status |"
-    $emptyRegistryRow = '| Пока нет | - | - | - | - | - |'
-    if ($index.Contains($emptyRegistryRow)) {
-        $index = $index.Replace($emptyRegistryRow, $registryRow)
+    $indexResult = Invoke-PowerShellChild `
+        -ScriptPath (Join-Path $CaseRoot 'scripts/update-mastery-index.ps1') `
+        -Arguments @('-Root', $CaseRoot, '-Mode', 'Write') `
+        -WorkingDirectory $CaseRoot `
+        -Timeout $TimeoutSeconds
+    if ($indexResult.TimedOut -or $indexResult.StreamTimedOut -or $indexResult.ExitCode -ne 0) {
+        throw "HARNESS-METHOD-INDEX: $(Get-SafeChildSummary -Result $indexResult -FixturePath $CaseRoot)"
     }
-    else {
-        $index += "`n$registryRow`n"
-    }
-    Write-Utf8BomFixture -Path $indexPath -Content $index
     return ('mastery/local/' + $safeFileName)
 }
 
@@ -1381,20 +1464,40 @@ try {
                             $runRoot = New-ResearchRun -CaseRoot $caseRoot -IncludeFiles $expectedRunFiles
                             $methodRef = [string]$subcase.MethodRef
                             if ($subcase.Name -cne 'unknown') {
+                                $initialStatus = if ($subcase.Name -ceq 'superseded') { 'deprecated' } else { $subcase.Status }
                                 $methodRef = Add-LocalMethodFixture `
                                     -CaseRoot $caseRoot `
                                     -MethodId $subcase.MethodId `
-                                    -Status $subcase.Status `
+                                    -Status $initialStatus `
                                     -VerifiedAt $subcase.VerifiedAt `
                                     -ReviewDue $subcase.ReviewDue
                                 if ($subcase.Name -ceq 'superseded') {
-                                    $null = Add-LocalMethodFixture `
+                                    $replacementRef = Add-LocalMethodFixture `
                                         -CaseRoot $caseRoot `
                                         -MethodId 'replacement-fixture-method' `
                                         -Status active `
                                         -VerifiedAt '2026-08-01' `
-                                        -ReviewDue '2099-12-31' `
-                                        -Supersedes $subcase.MethodId
+                                        -ReviewDue '2099-12-31'
+                                    $supersededPath = Join-Path $caseRoot $methodRef
+                                    $replacementPath = Join-Path $caseRoot $replacementRef
+                                    $supersededText = [System.IO.File]::ReadAllText($supersededPath).Replace(
+                                        'status: deprecated',
+                                        'status: superseded'
+                                    )
+                                    $replacementText = [System.IO.File]::ReadAllText($replacementPath).Replace(
+                                        'supersedes: null',
+                                        "supersedes: $($subcase.MethodId)"
+                                    )
+                                    Write-Utf8BomFixture -Path $supersededPath -Content $supersededText
+                                    Write-Utf8BomFixture -Path $replacementPath -Content $replacementText
+                                    $indexResult = Invoke-PowerShellChild `
+                                        -ScriptPath (Join-Path $caseRoot 'scripts/update-mastery-index.ps1') `
+                                        -Arguments @('-Root', $caseRoot, '-Mode', 'Write') `
+                                        -WorkingDirectory $caseRoot `
+                                        -Timeout $TimeoutSeconds
+                                    if ($indexResult.TimedOut -or $indexResult.StreamTimedOut -or $indexResult.ExitCode -ne 0) {
+                                        throw "HARNESS-SUPERSEDED-INDEX: $(Get-SafeChildSummary -Result $indexResult -FixturePath $caseRoot)"
+                                    }
                                 }
                             }
                             Set-RunLocalMethodRef -RunRoot $runRoot -MethodId $subcase.MethodId -MethodRef $methodRef

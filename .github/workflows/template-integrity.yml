@@ -1,0 +1,86 @@
+name: Template integrity
+
+on:
+  push:
+    branches:
+      - source
+  pull_request:
+    branches:
+      - source
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-gates:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout source with tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify immutable v1 release tag exists
+        shell: pwsh
+        run: |
+          git show-ref --verify refs/tags/v1.6.2
+
+      - name: Verify platform primitives
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-platform.ps1
+
+      - name: Verify source structure
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/verify-structure.ps1 -Root . -Mode TemplateSource
+
+      - name: Verify Plan v2 lifecycle
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-plan-lifecycle.ps1
+
+      - name: Verify canon and graph
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-canon-graph.ps1
+
+      - name: Verify Mastery v2
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-mastery-v2.ps1
+
+      - name: Verify consumer boundary
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-v2-consumer-boundary.ps1
+
+      - name: Verify local and GitHub bootstrap
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-cross-platform-bootstrap.ps1
+
+      - name: Verify tagged distribution roundtrip
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-github-template-distribution.ps1
+
+      - name: Verify semantic knowledge fixtures
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/verify-knowledge.ps1 -Root . -SelfTest
+
+      - name: Verify privacy and RAW fixtures
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File ./scripts/test-knowledge-privacy.ps1

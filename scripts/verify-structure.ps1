@@ -11,6 +11,9 @@ trap {
         [Console]::Error.WriteLine(
             'FAIL [structure]: проверка заблокирована (internal-validation-error); repository data скрыты.'
         )
+        if ($VerbosePreference -ceq 'Continue') {
+            [Console]::Error.WriteLine("DETAIL [structure]: $([string]$_.Exception.Message)")
+        }
     }
     catch {
     }
@@ -60,7 +63,47 @@ function Test-EarlyExactPathCase {
 }
 
 $trustedStructureScriptsRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]'\/')
-$trustedStructureModulePath = [System.IO.Path]::GetFullPath((Join-Path $trustedStructureScriptsRoot 'lib\ModelProject.Knowledge.psm1'))
+$trustedPlatformModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedStructureScriptsRoot, 'lib', 'ModelProject.Platform.psm1')
+)
+if (-not (Test-Path -LiteralPath $trustedPlatformModulePath -PathType Leaf) -or
+    $null -ne (Get-EarlyReparsePoint $trustedPlatformModulePath) -or
+    -not (Test-EarlyExactPathCase $trustedPlatformModulePath)) {
+    throw 'Trusted platform helper module failed bootstrap integrity check.'
+}
+$trustedPlatformModule = Import-Module -Name $trustedPlatformModulePath -Scope Local -Force -PassThru -ErrorAction Stop
+$trustedPlatformExportNames = @(
+    'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
+    'Get-ModelProjectNullDevice', 'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
+    'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
+    'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',
+    'Enter-ModelProjectFileLock', 'Exit-ModelProjectFileLock'
+)
+if ($null -eq $trustedPlatformModule -or $trustedPlatformModule.ExportedCommands.Count -ne $trustedPlatformExportNames.Count) {
+    throw 'Trusted platform helper module export set mismatch.'
+}
+$trustedPlatformCommands = @{}
+foreach ($commandName in $trustedPlatformExportNames) {
+    $command = $trustedPlatformModule.ExportedCommands[$commandName]
+    if ($null -eq $command -or $command.CommandType -ne [System.Management.Automation.CommandTypes]::Function -or
+        $null -eq $command.Module -or
+        -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals($trustedPlatformModulePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Trusted platform helper module export origin mismatch.'
+    }
+    $trustedPlatformCommands[$commandName] = $command
+}
+$script:mppGetGitExecutable = $trustedPlatformCommands['Get-ModelProjectGitExecutable']
+$script:mppGetPowerShellHost = $trustedPlatformCommands['Get-ModelProjectPowerShellHost']
+$script:mppGetNullDevice = $trustedPlatformCommands['Get-ModelProjectNullDevice']
+$script:mppSetGitEnvironment = $trustedPlatformCommands['Set-ModelProjectSanitizedGitEnvironment']
+$script:mppInvokeProcess = $trustedPlatformCommands['Invoke-ModelProjectProcess']
+$script:mppGetPathComparison = $trustedPlatformCommands['Get-ModelProjectPathComparison']
+$script:nullDevice = & $script:mppGetNullDevice
+
+$trustedStructureModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedStructureScriptsRoot, 'lib', 'ModelProject.Knowledge.psm1')
+)
 if (-not (Test-Path -LiteralPath $trustedStructureModulePath -PathType Leaf) -or
     $null -ne (Get-EarlyReparsePoint $trustedStructureModulePath) -or
     -not (Test-EarlyExactPathCase $trustedStructureModulePath) -or
@@ -70,6 +113,7 @@ if (-not (Test-Path -LiteralPath $trustedStructureModulePath -PathType Leaf) -or
 $trustedStructureModule = Import-Module -Name $trustedStructureModulePath -Scope Local -Force -PassThru -ErrorAction Stop
 $trustedStructureExportNames = @(
     'Test-ModelProjectFrontMatterScalarValue', 'Test-ModelProjectJsonScalar',
+    'ConvertFrom-ModelProjectSimpleYamlScalar', 'Read-ModelProjectSimpleFrontMatterDocument',
     'ConvertTo-ModelProjectPercentDecodedText', 'Get-ModelProjectHttpsUrlSafetyFinding',
     'Get-ModelProjectHttpsUrlsFromText', 'Get-ModelProjectSensitiveTextFindings',
     'Remove-ModelProjectCommonMarkContainerPrefixes', 'Test-ModelProjectMarkdownEscaped',
@@ -390,7 +434,7 @@ if ($effectiveMode -eq 'TemplateSource') {
 
 $requiredContainers = [System.Collections.Generic.List[string]]::new()
 foreach ($relativePath in ($commonRequiredLeaves + $portableEmptyDirectories)) {
-    $parentPath = [System.IO.Path]::GetDirectoryName($relativePath.Replace('/', '\'))
+    $parentPath = [System.IO.Path]::GetDirectoryName($relativePath)
     while (-not [string]::IsNullOrWhiteSpace($parentPath)) {
         $normalizedParent = $parentPath.Replace('\', '/')
         if ($requiredContainers -cnotcontains $normalizedParent) {
@@ -404,13 +448,12 @@ function Get-RelativePath {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
     $full = [System.IO.Path]::GetFullPath($AbsolutePath)
-    if ($full.Equals($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-        return ''
-    }
-    if (-not $full.StartsWith($rootPath + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not (& $script:mpsTestPathWithinRoot -Root $rootPath -Path $full)) {
         return $null
     }
-    return $full.Substring($rootPath.Length + 1).Replace('\', '/')
+    $relative = [System.IO.Path]::GetRelativePath($rootPath, $full)
+    if ($relative -ceq '.') { return '' }
+    return $relative.Replace('\', '/')
 }
 
 function Test-PathWithinRoot {
@@ -444,35 +487,13 @@ function Convert-ToAnchor {
 }
 
 function Get-TrustedGitExecutable {
-    $command = Get-Command -Name 'git.exe' -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $command) {
-        $command = Get-Command -Name 'git' -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-    }
-    if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) { return $null }
-
-    try { $path = [System.IO.Path]::GetFullPath([string]$command.Source) }
+    try { return (& $script:mppGetGitExecutable -ControlledRoots @($rootPath)) }
     catch { return $null }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('git.exe', 'git') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf) -or
-        $null -ne (Get-EarlyReparsePoint $path) -or
-        (Test-PathWithinRoot $path)) {
-        return $null
-    }
-    return $path
 }
 
 function Get-TrustedCurrentPowerShellHost {
-    try { $path = [System.IO.Path]::GetFullPath((Get-Process -Id $PID -ErrorAction Stop).MainModule.FileName) }
+    try { return (& $script:mppGetPowerShellHost -ControlledRoots @($rootPath)) }
     catch { return $null }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('powershell.exe', 'pwsh.exe') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf) -or
-        $null -ne (Get-EarlyReparsePoint $path) -or
-        (Test-PathWithinRoot $path)) {
-        return $null
-    }
-    return $path
 }
 
 function Read-StrictSmallControlFileNoBom {
@@ -547,8 +568,9 @@ function Test-TrustedGitMetadataMarker {
         else {
             [System.IO.Path]::GetFullPath((Join-Path $gitDirectoryPath $backlinkValue))
         }
+        $comparison = & $script:mppGetPathComparison -Path $gitMetadataPath
         return (
-            $backlinkTarget.Equals([System.IO.Path]::GetFullPath($gitMetadataPath), [System.StringComparison]::OrdinalIgnoreCase) -and
+            $backlinkTarget.Equals([System.IO.Path]::GetFullPath($gitMetadataPath), $comparison) -and
             (Test-Path -LiteralPath $backlinkTarget -PathType Leaf) -and
             $null -eq (Get-EarlyReparsePoint $backlinkTarget)
         )
@@ -558,98 +580,16 @@ function Test-TrustedGitMetadataMarker {
     }
 }
 
-function ConvertTo-SanitizedProcessArgument {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-
-    if ($Value.IndexOf([char]0) -ge 0 -or $Value -match '[\r\n]') {
-        throw 'Аргумент дочернего процесса содержит запрещенный символ.'
-    }
-    if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
-
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.Append('"')
-    $backslashes = 0
-    foreach ($character in $Value.ToCharArray()) {
-        if ($character -eq '\') {
-            $backslashes++
-            continue
-        }
-        if ($character -eq '"') {
-            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
-            [void]$builder.Append('"')
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) {
-            [void]$builder.Append(('\' * $backslashes))
-            $backslashes = 0
-        }
-        [void]$builder.Append($character)
-    }
-    if ($backslashes -gt 0) {
-        [void]$builder.Append(('\' * ($backslashes * 2)))
-    }
-    [void]$builder.Append('"')
-    return $builder.ToString()
-}
-
 function Invoke-SanitizedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $Executable
-    $startInfo.Arguments = (($Arguments | ForEach-Object {
-        ConvertTo-SanitizedProcessArgument -Value ([string]$_)
-    }) -join ' ')
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $null = $startInfo.EnvironmentVariables
-    $environment = $startInfo.Environment
-    if ($null -eq $environment) {
-        throw 'Окружение дочернего процесса недоступно.'
-    }
-    foreach ($name in @($environment.Keys)) {
-        if (([string]$name).StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$environment.Remove([string]$name)
-        }
-    }
-    $isPowerShellHost = [System.IO.Path]::GetFileName($Executable) -cin @('powershell.exe', 'pwsh.exe')
-    if ($isPowerShellHost) {
-        $startInfo.StandardOutputEncoding = $utf8NoBom
-        $startInfo.StandardErrorEncoding = $utf8NoBom
-    }
-    else {
-        $environment['GIT_CONFIG_NOSYSTEM'] = '1'
-        $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
-        $environment['GIT_CONFIG_SYSTEM'] = 'NUL'
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    try {
-        if (-not $process.Start()) {
-            throw 'Не удалось запустить дочерний процесс.'
-        }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $output = [System.Collections.Generic.List[string]]::new()
-        foreach ($streamText in @($stdoutTask.Result, $stderrTask.Result)) {
-            foreach ($line in @($streamText -split '\r?\n')) {
-                if ($line.Length -gt 0) { $output.Add($line) | Out-Null }
-            }
-        }
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = @($output) }
-    }
-    finally {
-        $process.Dispose()
-    }
+    $isGit = [System.IO.Path]::GetFileName($Executable) -cin @('git', 'git.exe')
+    $result = & $script:mppInvokeProcess -Executable $Executable -Arguments $Arguments -GitEnvironment:$isGit
+    if ($result.LimitExceeded) { throw 'Дочерний процесс превысил лимит вывода.' }
+    return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = @($result.Output) }
 }
 
 function Invoke-BoundedGitLsFiles {
@@ -661,16 +601,14 @@ function Invoke-BoundedGitLsFiles {
     $arguments = @(
         '-c', "safe.directory=$rootPath",
         '-c', 'core.fsmonitor=false',
-        '-c', 'core.hooksPath=NUL',
+        '-c', "core.hooksPath=$script:nullDevice",
         '-c', 'core.quotePath=false',
         '-C', $rootPath,
         'ls-files'
     )
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $GitExecutable
-    $startInfo.Arguments = (($arguments | ForEach-Object {
-        ConvertTo-SanitizedProcessArgument -Value ([string]$_)
-    }) -join ' ')
+    foreach ($argument in $arguments) { [void]$startInfo.ArgumentList.Add([string]$argument) }
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -682,14 +620,7 @@ function Invoke-BoundedGitLsFiles {
     if ($null -eq $environment) {
         return [pscustomobject]@{ Failed = $true; Overflow = $false; Paths = @() }
     }
-    foreach ($name in @($environment.Keys)) {
-        if (([string]$name).StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$environment.Remove([string]$name)
-        }
-    }
-    $environment['GIT_CONFIG_NOSYSTEM'] = '1'
-    $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
-    $environment['GIT_CONFIG_SYSTEM'] = 'NUL'
+    & $script:mppSetGitEnvironment -Environment $environment
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -764,7 +695,7 @@ function Test-Anchor {
 function Get-TreeMarkdown {
     param([string]$RelativeDirectory)
 
-    $directory = Join-Path $rootPath $RelativeDirectory.Replace('/', '\')
+    $directory = Join-Path $rootPath $RelativeDirectory
     if (-not (Test-Path -LiteralPath $directory -PathType Container)) { return @() }
     $directoryReparse = Get-ReparsePointInPath $directory
     if ($null -ne $directoryReparse) {
@@ -819,10 +750,35 @@ function Test-IsTemplateLinkAllowed {
     $sourceRelative = Get-RelativePath $SourceFile
     $targetRelative = Get-RelativePath $TargetFile
     if ($null -eq $sourceRelative -or $null -eq $targetRelative) { return $false }
+    if ($effectiveMode -ceq 'TemplateSource' -and $sourceRelative -ceq 'plans/INDEX.md' -and
+        $sourceOnlyPaths -ccontains $targetRelative) {
+        return $true
+    }
     if ($portableFiles -ccontains $sourceRelative) {
         return Test-IsDeclaredPath -RelativePath $targetRelative -DeclaredFiles $portableFiles -DeclaredDirectories $portableEmptyDirectories
     }
     return Test-IsDeclaredPath -RelativePath $targetRelative -DeclaredFiles ($portableFiles + $sourceOnlyPaths) -DeclaredDirectories $portableEmptyDirectories
+}
+
+function Test-IsLegacyRetiredHistoryReference {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceFile,
+        [Parameter(Mandatory = $true)][string]$TargetFile
+    )
+
+    if ($effectiveMode -cne 'TemplateSource') { return $false }
+    $sourceRelative = Get-RelativePath $SourceFile
+    $targetRelative = Get-RelativePath $TargetFile
+    if ($null -eq $sourceRelative -or $null -eq $targetRelative -or
+        $sourceOnlyPaths -cnotcontains $sourceRelative -or
+        $sourceRelative -cnotmatch '^(?:docs/decisions|plans|retrospectives)/2026-[^/]+\.md$') {
+        return $false
+    }
+    return $targetRelative -cin @(
+        'analysis/CONTRACT.md',
+        'mastery/analyst/INDEX.md',
+        'scripts/verify-analysis.ps1'
+    )
 }
 
 function Test-IsTemplateOverlayPath {
@@ -845,7 +801,7 @@ function Test-HasRequiredFrontmatterField {
 }
 
 function Test-MasteryLocalRegistry {
-    $localRoot = Join-Path $rootPath 'mastery\local'
+    $localRoot = [System.IO.Path]::Combine($rootPath, 'mastery', 'local')
     $indexPath = Join-Path $localRoot 'INDEX.md'
     if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) { return }
 
@@ -859,12 +815,12 @@ function Test-MasteryLocalRegistry {
         $targetPath = ($target -split '#', 2)[0]
         try {
             $targetPath = [System.Uri]::UnescapeDataString($targetPath)
-            $absoluteTarget = [System.IO.Path]::GetFullPath((Join-Path $localRoot $targetPath.Replace('/', '\')))
+            $absoluteTarget = [System.IO.Path]::GetFullPath((Join-Path $localRoot $targetPath))
         }
         catch {
             continue
         }
-        if ($absoluteTarget.StartsWith($localRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        if (& $script:mpsTestPathWithinRoot -Root $localRoot -Path $absoluteTarget) {
             $relativeTarget = $absoluteTarget.Substring($rootPath.Length + 1).Replace('\', '/')
             if ($relativeTarget -cne 'mastery/local/INDEX.md' -and
                 $relativeTarget -cne 'mastery/local/TEMPLATE.md' -and
@@ -899,7 +855,7 @@ function Test-MasteryLocalRegistry {
         }
     }
     foreach ($registeredFile in $registered) {
-        if (-not (Test-Path -LiteralPath (Join-Path $rootPath $registeredFile.Replace('/', '\')) -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $rootPath $registeredFile) -PathType Leaf)) {
             $issues.Add("mastery/local: зарегистрирован отсутствующий файл: $registeredFile")
         }
     }
@@ -981,8 +937,7 @@ foreach ($baselineEntry in $masteryBaselineFiles) {
     $baselinePath = [string]$baselineEntry.path
     $baselineHash = ([string]$baselineEntry.sha256).ToLowerInvariant()
     if (-not (Test-ManifestRelativePath $baselinePath) -or
-        -not ($baselinePath.StartsWith('mastery/researcher/', [System.StringComparison]::Ordinal) -or
-            $baselinePath.StartsWith('mastery/analyst/', [System.StringComparison]::Ordinal))) {
+        -not $baselinePath.StartsWith('mastery/researcher/', [System.StringComparison]::Ordinal)) {
         $issues.Add("Manifest mastery baseline: недопустимый path: $baselinePath")
         continue
     }
@@ -999,7 +954,7 @@ foreach ($baselineEntry in $masteryBaselineFiles) {
     if ($portableFiles -cnotcontains $baselinePath) {
         $issues.Add("Manifest mastery baseline отсутствует в portable_files: $baselinePath")
     }
-    $baselineAbsolute = Join-Path $rootPath $baselinePath.Replace('/', '\')
+    $baselineAbsolute = Join-Path $rootPath $baselinePath
     if (Test-Path -LiteralPath $baselineAbsolute -PathType Leaf) {
         $actualHash = Get-BoundedFileSha256 -LiteralPath $baselineAbsolute -MaxBytes $resourceLimits.MarkdownBytes -Label $baselinePath
         if ($actualHash -cne $baselineHash) {
@@ -1008,9 +963,7 @@ foreach ($baselineEntry in $masteryBaselineFiles) {
     }
 }
 $portableBaselineProfiles = @($portableFiles | Where-Object {
-    ($_.StartsWith('mastery/researcher/', [System.StringComparison]::Ordinal) -or
-        $_.StartsWith('mastery/analyst/', [System.StringComparison]::Ordinal)) -and
-    $_ -like '*.md'
+    $_.StartsWith('mastery/researcher/', [System.StringComparison]::Ordinal) -and $_ -like '*.md'
 })
 foreach ($profilePath in $portableBaselineProfiles) {
     if (-not $baselineSeen.ContainsKey($profilePath.ToLowerInvariant())) {
@@ -1022,7 +975,7 @@ if ([string]::IsNullOrWhiteSpace([string]$manifest.mastery_baseline.bundle_versi
 }
 
 foreach ($relative in $commonRequiredLeaves) {
-    $absolute = Join-Path $rootPath $relative.Replace('/', '\')
+    $absolute = Join-Path $rootPath $relative
     if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
         $issues.Add("Отсутствует обязательный файл: $relative")
     }
@@ -1036,7 +989,7 @@ foreach ($relative in $commonRequiredLeaves) {
 }
 
 foreach ($relative in $requiredContainers) {
-    $absolute = Join-Path $rootPath $relative.Replace('/', '\')
+    $absolute = Join-Path $rootPath $relative
     if (-not (Test-Path -LiteralPath $absolute -PathType Container)) {
         $issues.Add("Отсутствует обязательный каталог: $relative")
     }
@@ -1158,7 +1111,7 @@ function Test-DistributionDescriptor {
             }
             $seen[$relativePath.ToLowerInvariant()] = $true
             if ($VerificationMode -ceq 'DistributionTemplate') {
-                $absolutePath = Join-Path $rootPath $relativePath.Replace('/', '\')
+                $absolutePath = Join-Path $rootPath $relativePath
                 if (Test-Path -LiteralPath $absolutePath -PathType Leaf) {
                     $actualHash = Get-BoundedFileSha256 `
                         -LiteralPath $absolutePath `
@@ -1208,7 +1161,7 @@ if ($effectiveMode -eq 'TemplateSource') {
     if ($projectId -cne '{{PROJECT_SLUG}}') { $issues.Add('TemplateSource: project_id должен содержать {{PROJECT_SLUG}}.') }
     if (Test-Path -LiteralPath (Join-Path $rootPath 'TEMPLATE-ORIGIN.md')) { $issues.Add('TemplateSource: TEMPLATE-ORIGIN.md допустим только в созданном проекте.') }
     foreach ($targetPath in $initializationRenameTo) {
-        if (Test-Path -LiteralPath (Join-Path $rootPath $targetPath.Replace('/', '\'))) {
+        if (Test-Path -LiteralPath (Join-Path $rootPath $targetPath)) {
             $issues.Add("TemplateSource: initialization target допустим только в generated project: $targetPath")
         }
     }
@@ -1223,12 +1176,12 @@ elseif ($effectiveMode -eq 'DistributionTemplate') {
     if ($projectId -cne '{{PROJECT_SLUG}}') { $issues.Add('DistributionTemplate: project_id должен содержать {{PROJECT_SLUG}}.') }
     if (Test-Path -LiteralPath (Join-Path $rootPath 'TEMPLATE-ORIGIN.md')) { $issues.Add('DistributionTemplate: TEMPLATE-ORIGIN.md допустим только после setup.') }
     foreach ($targetPath in $initializationRenameTo) {
-        if (Test-Path -LiteralPath (Join-Path $rootPath $targetPath.Replace('/', '\'))) {
+        if (Test-Path -LiteralPath (Join-Path $rootPath $targetPath)) {
             $issues.Add("DistributionTemplate: initialization target допустим только после setup: $targetPath")
         }
     }
     foreach ($sourceOnlyPath in $sourceOnlyPaths) {
-        if (Test-Path -LiteralPath (Join-Path $rootPath $sourceOnlyPath.Replace('/', '\'))) {
+        if (Test-Path -LiteralPath (Join-Path $rootPath $sourceOnlyPath)) {
             $issues.Add("DistributionTemplate: source-only manifest-путь существует: $sourceOnlyPath")
         }
     }
@@ -1274,13 +1227,13 @@ else {
         }
     }
     foreach ($forbiddenPath in $generatedForbiddenPaths) {
-        $forbiddenAbsolute = Join-Path $rootPath $forbiddenPath.Replace('/', '\')
+        $forbiddenAbsolute = Join-Path $rootPath $forbiddenPath
         if (Test-Path -LiteralPath $forbiddenAbsolute) {
             $issues.Add("GeneratedProject: запрещенный manifest-путь существует: $forbiddenPath")
         }
     }
     foreach ($sourceOnlyPath in $sourceOnlyPaths) {
-        $sourceOnlyAbsolute = Join-Path $rootPath $sourceOnlyPath.Replace('/', '\')
+        $sourceOnlyAbsolute = Join-Path $rootPath $sourceOnlyPath
         if (Test-Path -LiteralPath $sourceOnlyAbsolute) {
             $issues.Add("GeneratedProject: source-only manifest-путь существует: $sourceOnlyPath")
         }
@@ -1290,7 +1243,8 @@ else {
 $trackedPaths = @{}
 if ($effectiveMode -eq 'TemplateSource' -and (Test-Path -LiteralPath (Join-Path $rootPath '.git'))) {
     $trustedToolRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path.TrimEnd([char[]]'\/')
-    if (-not $rootPath.Equals($trustedToolRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $comparison = & $script:mppGetPathComparison -Path $trustedToolRoot
+    if (-not $rootPath.Equals($trustedToolRoot, $comparison)) {
         $issues.Add('TemplateSource: trusted verifier не запускает Git внутри произвольного -Root. Проверяй внешний template source его собственным доверенным verifier-ом.')
     }
     elseif (-not (Test-TrustedGitMetadataMarker)) {
@@ -1404,17 +1358,17 @@ foreach ($directory in (Get-ChildItem -LiteralPath $rootPath -Recurse -Directory
 $canonicalMarkdown = @()
 if ($effectiveMode -eq 'TemplateSource') {
     $canonicalMarkdown = @(($portableFiles + $sourceOnlyPaths) | Where-Object { $_ -like '*.md' } | ForEach-Object {
-        Join-Path $rootPath $_.Replace('/', '\')
+        Join-Path $rootPath $_
     })
 }
 elseif ($effectiveMode -eq 'DistributionTemplate') {
     $canonicalMarkdown = @($portableFiles | Where-Object { $_ -like '*.md' } | ForEach-Object {
-        Join-Path $rootPath $_.Replace('/', '\')
+        Join-Path $rootPath $_
     })
 }
 else {
     $canonicalMarkdown = @($generatedPortableFiles | Where-Object { $_ -like '*.md' } | ForEach-Object {
-        Join-Path $rootPath $_.Replace('/', '\')
+        Join-Path $rootPath $_
     })
     $canonicalMarkdown += Join-Path $rootPath 'TEMPLATE-ORIGIN.md'
     foreach ($extensionZone in $generatedExtensionZones) {
@@ -1450,7 +1404,7 @@ function Resolve-Wikilink {
 
     if ([string]::IsNullOrWhiteSpace($LinkPath)) { return @($SourceFile) }
     $hasDirectory = $LinkPath.Contains('/') -or $LinkPath.Contains('\')
-    $candidate = $LinkPath.Replace('/', '\')
+    $candidate = $LinkPath.Replace('\', '/')
     if ($hasDirectory) {
         $base = Join-Path $rootPath $candidate
         if (-not [System.IO.Path]::HasExtension($base)) { $base += '.md' }
@@ -2489,7 +2443,7 @@ function Test-MarkdownTarget {
             Join-Path $rootPath $pathPart.TrimStart('/')
         }
         else {
-            Join-Path (Split-Path -Parent $SourceFile) $pathPart.Replace('/', '\')
+            Join-Path (Split-Path -Parent $SourceFile) $pathPart
         }
         $resolved = [System.IO.Path]::GetFullPath($resolved)
     }
@@ -2503,7 +2457,9 @@ function Test-MarkdownTarget {
         $issues.Add("Markdown-ссылка выходит за корень: ${relativeFile}:$line (outside-root-target).")
     }
     elseif (-not (Test-Path -LiteralPath $resolved)) {
-        $issues.Add("Битая Markdown-ссылка: ${relativeFile}:$line (missing-local-target).")
+        if (-not (Test-IsLegacyRetiredHistoryReference -SourceFile $SourceFile -TargetFile $resolved)) {
+            $issues.Add("Битая Markdown-ссылка: ${relativeFile}:$line (missing-local-target).")
+        }
     }
     elseif ($effectiveMode -cin @('TemplateSource', 'DistributionTemplate') -and -not (Test-IsTemplateLinkAllowed -SourceFile $SourceFile -TargetFile $resolved)) {
         $issues.Add("Markdown-ссылка ведет вне переносимого allowlist: ${relativeFile}:$line (target-not-portable).")
@@ -2672,7 +2628,9 @@ if ($effectiveMode -cne 'DistributionTemplate') {
     }
     else {
         Invoke-TrustedSemanticGate -ScriptName 'update-knowledge-graph.ps1' -GateLabel 'knowledge-graph' -PowerShellExecutable $powershellExe -AdditionalArguments @('-Mode', 'Check')
-        Invoke-TrustedSemanticGate -ScriptName 'verify-analysis.ps1' -GateLabel 'analysis' -PowerShellExecutable $powershellExe
+        Invoke-TrustedSemanticGate -ScriptName 'update-mastery-index.ps1' -GateLabel 'mastery-index' -PowerShellExecutable $powershellExe -AdditionalArguments @('-Mode', 'Check')
+        Invoke-TrustedSemanticGate -ScriptName 'verify-canon.ps1' -GateLabel 'canon' -PowerShellExecutable $powershellExe
+        Invoke-TrustedSemanticGate -ScriptName 'verify-plans.ps1' -GateLabel 'plans' -PowerShellExecutable $powershellExe
         Invoke-TrustedSemanticGate -ScriptName 'verify-knowledge.ps1' -GateLabel 'knowledge' -PowerShellExecutable $powershellExe
     }
 }

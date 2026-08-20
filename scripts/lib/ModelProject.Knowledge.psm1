@@ -1,5 +1,8 @@
 Set-StrictMode -Version 2.0
 
+$script:PlatformModulePath = Join-Path $PSScriptRoot 'ModelProject.Platform.psm1'
+Import-Module $script:PlatformModulePath -Scope Local
+
 function Test-ModelProjectFrontMatterScalarValue {
     param(
         $Value,
@@ -8,6 +11,67 @@ function Test-ModelProjectFrontMatterScalarValue {
 
     if ($null -eq $Value) { return $AllowNull.IsPresent }
     return ($Value -is [string] -or $Value -is [ValueType])
+}
+
+function ConvertFrom-ModelProjectSimpleYamlScalar {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+    $trimmed = $Value.Trim()
+    if ($trimmed -ceq 'null' -or $trimmed -ceq '~') { return $null }
+    if ($trimmed -ceq '[]') { return ,[string[]]@() }
+    if ($trimmed.Length -ge 2 -and $trimmed.StartsWith("'") -and $trimmed.EndsWith("'")) {
+        return $trimmed.Substring(1, $trimmed.Length - 2).Replace("''", "'")
+    }
+    if ($trimmed.Length -ge 2 -and $trimmed.StartsWith('"') -and $trimmed.EndsWith('"')) {
+        return $trimmed.Substring(1, $trimmed.Length - 2).Replace('\"', '"').Replace('\\', '\')
+    }
+    return $trimmed
+}
+
+function Read-ModelProjectSimpleFrontMatterDocument {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [long]$MaxBytes = 2MB
+    )
+    $rootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $content = Read-ModelProjectBoundedUtf8File -Root $rootPath -Path $fullPath -MaxBytes $MaxBytes
+    $match = [regex]::Match($content, '\A---\r?\n(?<front>.*?)\r?\n---(?:\r?\n|\z)', 'Singleline')
+    if (-not $match.Success) { throw "Отсутствует корректный YAML frontmatter: $fullPath" }
+    $data = [ordered]@{}
+    $currentList = $null
+    foreach ($rawLine in ($match.Groups['front'].Value -split '\r?\n')) {
+        if ([string]::IsNullOrWhiteSpace($rawLine)) { continue }
+        if ($rawLine -cmatch '^(?<key>[a-z][a-z0-9_]*)\s*:\s*(?<value>.*)$') {
+            $key = [string]$Matches['key']
+            if ($data.Contains($key)) { throw "Duplicate frontmatter field '$key': $fullPath" }
+            $value = [string]$Matches['value']
+            if ([string]::IsNullOrWhiteSpace($value)) {
+                $data[$key] = [System.Collections.Generic.List[string]]::new()
+                $currentList = $key
+            }
+            else {
+                $data[$key] = ConvertFrom-ModelProjectSimpleYamlScalar -Value $value
+                $currentList = $null
+            }
+            continue
+        }
+        if ($null -ne $currentList -and $rawLine -cmatch '^\s{2}-\s+(?<value>.+?)\s*$') {
+            $data[$currentList].Add([string](ConvertFrom-ModelProjectSimpleYamlScalar -Value $Matches['value']))
+            continue
+        }
+        throw "Неподдерживаемая строка frontmatter: $fullPath"
+    }
+    foreach ($key in @($data.Keys)) {
+        if ($data[$key] -is [System.Collections.Generic.List[string]]) { $data[$key] = @($data[$key]) }
+    }
+    return [pscustomobject]@{
+        Path = $fullPath
+        RelativePath = Get-ModelProjectRepositoryRelativePath -Root $rootPath -Path $fullPath
+        Content = $content
+        Body = $content.Substring($match.Index + $match.Length)
+        Data = $data
+    }
 }
 
 function Test-ModelProjectJsonScalar {
@@ -266,15 +330,7 @@ function Test-ModelProjectPathWithinRoot {
         [Parameter(Mandatory = $true)][string]$Path
     )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
-    return (
-        $pathFull.Equals($rootFull, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $pathFull.StartsWith(
-            $rootFull + [System.IO.Path]::DirectorySeparatorChar,
-            [System.StringComparison]::OrdinalIgnoreCase
-        )
-    )
+    return (ModelProject.Platform\Test-ModelProjectPathWithinRoot -Root $Root -Path $Path -AllowEqual)
 }
 
 function Get-ModelProjectReparsePointInFullChain {
@@ -283,25 +339,12 @@ function Get-ModelProjectReparsePointInFullChain {
         [Parameter(Mandatory = $true)][string]$Path
     )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Root
+    $pathFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Path
     if (-not (Test-ModelProjectPathWithinRoot -Root $rootFull -Path $pathFull)) {
         throw 'Path is outside Root.'
     }
-
-    $cursor = $pathFull
-    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
-        if (Test-Path -LiteralPath $cursor) {
-            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
-            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                return $item.FullName
-            }
-        }
-        $parent = Split-Path -Parent $cursor
-        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -ceq $cursor) { break }
-        $cursor = $parent
-    }
-    return $null
+    return (ModelProject.Platform\Get-ModelProjectLinkInFullChain -Path $pathFull)
 }
 
 function Get-ModelProjectRepositoryRelativePath {
@@ -310,13 +353,14 @@ function Get-ModelProjectRepositoryRelativePath {
         [Parameter(Mandatory = $true)][string]$Path
     )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Root
+    $pathFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Path
     if (-not (Test-ModelProjectPathWithinRoot -Root $rootFull -Path $pathFull)) {
         throw 'Path is outside Root.'
     }
-    if ($pathFull.Equals($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) { return '' }
-    return $pathFull.Substring($rootFull.Length + 1).Replace('\', '/')
+    $comparison = ModelProject.Platform\Get-ModelProjectPathComparison -Path $rootFull
+    if ($pathFull.Equals($rootFull, $comparison)) { return '' }
+    return [System.IO.Path]::GetRelativePath($rootFull, $pathFull).Replace('\', '/')
 }
 
 function Test-ModelProjectExactPathCase {
@@ -325,11 +369,12 @@ function Test-ModelProjectExactPathCase {
         [Parameter(Mandatory = $true)][string]$Path
     )
 
-    $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd([char[]]'\/')
-    $pathFull = [System.IO.Path]::GetFullPath($Path)
+    $rootFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Root
+    $pathFull = ModelProject.Platform\Get-ModelProjectNormalizedFullPath -Path $Path
     if (-not (Test-ModelProjectPathWithinRoot -Root $rootFull -Path $pathFull)) { return $false }
     if (-not (Test-Path -LiteralPath $pathFull)) { return $false }
-    if ($pathFull.Equals($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $comparison = ModelProject.Platform\Get-ModelProjectPathComparison -Path $rootFull
+    if ($pathFull.Equals($rootFull, $comparison)) {
         return $pathFull -ceq (Get-Item -LiteralPath $pathFull -Force).FullName.TrimEnd([char[]]'\/')
     }
 
@@ -477,7 +522,7 @@ function Resolve-ModelProjectSafeReference {
         $result.Error = 'invalid-anchor'; return [pscustomobject]$result
     }
     $base = if ($ReferenceBase -ceq 'Repository') { $rootFull } else { Split-Path -Parent $sourceFull }
-    try { $full = [System.IO.Path]::GetFullPath((Join-Path $base $pathPart.Replace('/', '\'))) }
+    try { $full = [System.IO.Path]::GetFullPath((Join-Path $base $pathPart)) }
     catch { $result.Error = 'invalid-path'; return [pscustomobject]$result }
     if (-not (Test-ModelProjectPathWithinRoot -Root $rootFull -Path $full)) {
         $result.Error = 'path-outside-root'; return [pscustomobject]$result
@@ -502,6 +547,8 @@ function Resolve-ModelProjectSafeReference {
 
 Microsoft.PowerShell.Core\Export-ModuleMember -Function @(
     'Test-ModelProjectFrontMatterScalarValue',
+    'ConvertFrom-ModelProjectSimpleYamlScalar',
+    'Read-ModelProjectSimpleFrontMatterDocument',
     'Test-ModelProjectJsonScalar',
     'ConvertTo-ModelProjectPercentDecodedText',
     'Get-ModelProjectHttpsUrlSafetyFinding',

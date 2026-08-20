@@ -23,5 +23,5 @@
 
 - [Источники](references.md)
 - [Доказательство ценности](proof-of-value.md)
-- [Аудитория](../business/audience/README.md)
+- [Пользователи и jobs](../product/users-and-jobs.md)
 - [Новые исследовательские запуски](../research/INDEX.md)

@@ -20,4 +20,4 @@
 
 - [Глубокое исследование](deep-research.md)
 - [MVP](mvp.md)
-- [Критерии решения](../business/goals/README.md)
+- [Критерии решения](../business/goals-and-metrics.md)

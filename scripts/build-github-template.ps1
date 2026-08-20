@@ -20,22 +20,18 @@ $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
 $OutputEncoding = $utf8NoBom
 $manifestMaxBytes = 1MB
 $payloadFileMaxBytes = 8MB
+$platformModulePath = Join-Path $PSScriptRoot 'lib/ModelProject.Platform.psm1'
+Import-Module $platformModulePath -Force
+$nullDevice = Get-ModelProjectNullDevice
+
+Assert-ModelProjectInputText -Value $Destination -Field Destination -MaxLength 1024
+Assert-ModelProjectInputText -Value $SourceTag -Field SourceTag -MaxLength 40 -Pattern '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+Assert-ModelProjectInputText -Value $TemplateRepositoryUrl -Field TemplateRepositoryUrl -MaxLength 300 -Pattern '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$'
 
 function Assert-NoReparseChain {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
-    $full = [System.IO.Path]::GetFullPath($AbsolutePath)
-    $pathRoot = [System.IO.Path]::GetPathRoot($full)
-    $current = $pathRoot
-    $relative = $full.Substring($pathRoot.Length)
-    foreach ($segment in (($relative -split '[\\/]') | Where-Object { $_ -ne '' })) {
-        $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) { break }
-        $item = Get-Item -LiteralPath $current -Force
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'Путь consumer build проходит через reparse point.'
-        }
-    }
+    Assert-ModelProjectNoLinkInFullChain -Path $AbsolutePath
 }
 
 function Assert-LocalDestination {
@@ -143,47 +139,7 @@ function Get-TrustedApplication {
         [Parameter(Mandatory = $true)][string[]]$AllowedLeaves
     )
 
-    $command = $null
-    foreach ($name in $Names) {
-        $command = Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $command) { break }
-    }
-    if ($null -eq $command) { throw 'Доверенное приложение не найдено.' }
-    $path = [System.IO.Path]::GetFullPath([string]$command.Source)
-    if ([System.IO.Path]::GetFileName($path) -cnotin $AllowedLeaves -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'Приложение не прошло проверку имени и типа.'
-    }
-    Assert-NoReparseChain $path
-    if ($path.StartsWith($sourceRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Доверенное приложение не может находиться внутри source root.'
-    }
-    return $path
-}
-
-function ConvertTo-SanitizedProcessArgument {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-
-    if ($Value.IndexOf([char]0) -ge 0 -or $Value -match '[\r\n]') { throw 'Небезопасный subprocess argument.' }
-    if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.Append('"')
-    $backslashes = 0
-    foreach ($character in $Value.ToCharArray()) {
-        if ($character -eq '\') { $backslashes++; continue }
-        if ($character -eq '"') {
-            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
-            [void]$builder.Append('"')
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) { [void]$builder.Append(('\' * $backslashes)); $backslashes = 0 }
-        [void]$builder.Append($character)
-    }
-    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
-    [void]$builder.Append('"')
-    return $builder.ToString()
+    return (Get-ModelProjectTrustedApplication -Names $Names -AllowedLeaves $AllowedLeaves -ControlledRoots @($sourceRoot))
 }
 
 function Invoke-SanitizedProcess {
@@ -193,48 +149,9 @@ function Invoke-SanitizedProcess {
         [switch]$GitEnvironment
     )
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $Executable
-    $startInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-SanitizedProcessArgument ([string]$_) }) -join ' ')
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.StandardOutputEncoding = $utf8NoBom
-    $startInfo.StandardErrorEncoding = $utf8NoBom
-    $environment = $startInfo.Environment
-    foreach ($name in @($environment.Keys)) {
-        if (([string]$name).StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$environment.Remove([string]$name)
-        }
-    }
-    if ($GitEnvironment) {
-        $environment['GIT_CONFIG_NOSYSTEM'] = '1'
-        $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
-        $environment['GIT_CONFIG_SYSTEM'] = 'NUL'
-    }
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    try {
-        if (-not $process.Start()) { throw 'Не удалось запустить subprocess.' }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $lines = [System.Collections.Generic.List[string]]::new()
-        [long]$characters = 0
-        foreach ($streamText in @($stdoutTask.Result, $stderrTask.Result)) {
-            foreach ($line in @($streamText -split '\r?\n')) {
-                if ($line.Length -eq 0) { continue }
-                $characters += $line.Length
-                if ($lines.Count -ge 100000 -or $characters -gt 8MB) { throw 'Subprocess output превысил лимит.' }
-                $lines.Add($line)
-            }
-        }
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = @($lines) }
-    }
-    finally {
-        $process.Dispose()
-    }
+    $result = Invoke-ModelProjectProcess -Executable $Executable -Arguments $Arguments -GitEnvironment:$GitEnvironment
+    if ($result.LimitExceeded) { throw 'Subprocess output превысил лимит.' }
+    return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = @($result.Output) }
 }
 
 function Invoke-SourceGit {
@@ -243,7 +160,7 @@ function Invoke-SourceGit {
     return Invoke-SanitizedProcess -Executable $gitExe -GitEnvironment -Arguments (@(
         '-c', "safe.directory=$sourceRoot",
         '-c', 'core.fsmonitor=false',
-        '-c', 'core.hooksPath=NUL',
+        '-c', "core.hooksPath=$nullDevice",
         '-c', 'core.quotePath=false',
         '-C', $sourceRoot
     ) + $Arguments)
@@ -274,7 +191,8 @@ function Remove-ExactStagingDirectory {
 
     $fullStaging = [System.IO.Path]::GetFullPath($StagingDirectory).TrimEnd([char[]]'\/')
     $fullParent = [System.IO.Path]::GetFullPath($ExpectedParent).TrimEnd([char[]]'\/')
-    if (-not ([System.IO.Path]::GetDirectoryName($fullStaging)).Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $comparison = Get-ModelProjectPathComparison -Path $fullParent
+    if (-not ([System.IO.Path]::GetDirectoryName($fullStaging)).Equals($fullParent, $comparison) -or
         [System.IO.Path]::GetFileName($fullStaging) -notmatch '^\.codex-github-template-[0-9a-f]{32}$') {
         throw 'Отказ от cleanup неожиданного staging path.'
     }
@@ -294,8 +212,7 @@ Assert-NoReparseChain $sourceRootCandidate
 $sourceRoot = (Resolve-Path -LiteralPath $sourceRootCandidate).Path.TrimEnd([char[]]'\/')
 Assert-LocalDestination $Destination
 $destinationPath = [System.IO.Path]::GetFullPath($Destination).TrimEnd([char[]]'\/')
-if ($destinationPath.Equals($sourceRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
-    $destinationPath.StartsWith($sourceRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+if (Test-ModelProjectPathWithinRoot -Root $sourceRoot -Path $destinationPath -AllowEqual) {
     throw 'Consumer payload нельзя строить внутри source template.'
 }
 if (Test-Path -LiteralPath $destinationPath) { throw 'Consumer destination уже существует.' }
@@ -303,13 +220,8 @@ $parent = Split-Path -Parent $destinationPath
 if (-not (Test-Path -LiteralPath $parent -PathType Container)) { throw 'Родительская папка destination не существует.' }
 Assert-NoReparseChain $parent
 
-$gitExe = Get-TrustedApplication -Names @('git.exe', 'git') -AllowedLeaves @('git.exe', 'git')
-try { $powershellExe = [System.IO.Path]::GetFullPath((Get-Process -Id $PID -ErrorAction Stop).MainModule.FileName) }
-catch { throw 'Не удалось определить trusted PowerShell host.' }
-if ([System.IO.Path]::GetFileName($powershellExe) -cnotin @('pwsh.exe', 'powershell.exe')) {
-    throw 'PowerShell host не прошел trusted executable gate.'
-}
-Assert-NoReparseChain $powershellExe
+$gitExe = Get-TrustedApplication -Names @('git', 'git.exe') -AllowedLeaves @('git', 'git.exe')
+$powershellExe = Get-ModelProjectPowerShellHost -ControlledRoots @($sourceRoot, $destinationPath)
 
 $gitMarker = Join-Path $sourceRoot '.git'
 if (-not (Test-Path -LiteralPath $gitMarker)) { throw 'Source repository не содержит .git marker.' }
@@ -422,8 +334,8 @@ try {
     New-Item -ItemType Directory -Path $stagingPath | Out-Null
     Assert-NoReparseChain $stagingPath
     foreach ($relativeFile in $portableFiles) {
-        $source = Join-Path $sourceRoot $relativeFile.Replace('/', '\')
-        $target = Join-Path $stagingPath $relativeFile.Replace('/', '\')
+        $source = Join-Path $sourceRoot $relativeFile
+        $target = Join-Path $stagingPath $relativeFile
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Portable file отсутствует: $relativeFile" }
         Assert-NoReparseChain $source
         $targetParent = Split-Path -Parent $target
@@ -434,7 +346,7 @@ try {
         Copy-Item -LiteralPath $source -Destination $target
     }
     foreach ($relativeDirectory in $portableEmptyDirectories) {
-        $targetDirectory = Join-Path $stagingPath $relativeDirectory.Replace('/', '\')
+        $targetDirectory = Join-Path $stagingPath $relativeDirectory
         if (-not (Test-Path -LiteralPath $targetDirectory -PathType Container)) {
             New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
         }
@@ -451,6 +363,26 @@ try {
     $projectText = $projectText.Replace('repository_kind: template-source', 'repository_kind: distribution-template')
     [System.IO.File]::WriteAllText($projectPath, $projectText, $utf8NoBom)
 
+    $planIndexer = Join-Path $stagingPath 'scripts/update-plan-index.ps1'
+    if (-not (Test-Path -LiteralPath $planIndexer -PathType Leaf)) { throw 'Consumer payload не содержит plan indexer.' }
+    Assert-NoReparseChain $planIndexer
+    $planIndexResult = Invoke-SanitizedProcess -Executable $powershellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $planIndexer,
+        '-Root', $stagingPath, '-Mode', 'Write'
+    )
+    foreach ($line in $planIndexResult.Output) { Write-Host ([string]$line) }
+    if ($planIndexResult.ExitCode -ne 0) { throw 'Не удалось пересобрать consumer plans/INDEX.md.' }
+
+    $masteryIndexer = Join-Path $stagingPath 'scripts/update-mastery-index.ps1'
+    if (-not (Test-Path -LiteralPath $masteryIndexer -PathType Leaf)) { throw 'Consumer payload не содержит mastery indexer.' }
+    Assert-NoReparseChain $masteryIndexer
+    $masteryIndexResult = Invoke-SanitizedProcess -Executable $powershellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $masteryIndexer,
+        '-Root', $stagingPath, '-Mode', 'Write'
+    )
+    foreach ($line in $masteryIndexResult.Output) { Write-Host ([string]$line) }
+    if ($masteryIndexResult.ExitCode -ne 0) { throw 'Не удалось пересобрать consumer mastery/local/INDEX.md.' }
+
     $commitDate = Invoke-SourceGit @('show', '-s', '--format=%cI', 'HEAD')
     $commitDateLines = @($commitDate.Output)
     if ($commitDate.ExitCode -ne 0 -or $commitDateLines.Count -ne 1) { throw 'Не удалось получить release commit timestamp.' }
@@ -458,7 +390,7 @@ try {
     foreach ($relativeFile in @($portableFiles | Where-Object { $_ -cne 'TEMPLATE-DISTRIBUTION.json' } | Sort-Object)) {
         $payloadHashes.Add([ordered]@{
             path = $relativeFile
-            sha256 = Get-BoundedFileSha256 -LiteralPath (Join-Path $stagingPath $relativeFile.Replace('/', '\')) -Label $relativeFile
+            sha256 = Get-BoundedFileSha256 -LiteralPath (Join-Path $stagingPath $relativeFile) -Label $relativeFile
         })
     }
     $descriptor = [ordered]@{

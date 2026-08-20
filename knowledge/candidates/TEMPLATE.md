@@ -3,14 +3,17 @@ id: KC-YYYYMMDD-HHmmss-00000000
 state: ready
 type: fact | decision | constraint | preference | method
 owner_scope: project
-domain: idea | business | architecture | operations | research | mastery | instructions
+domain: idea | product | business | architecture | codebase | operations | research | mastery | instructions
+method_kind: null
+method_summary: null
+method_applies_to: []
 claim_key: unique-lowercase-key
 target_ref: relative/path.md#section
 source_refs:
   - relative/source.md
 conflict_refs: []
 confidence: high | medium | low | unknown
-capture_basis: repo-derived | explicit-user-capture | research-derived
+capture_basis: repo-derived | explicit-user-capture | research-derived | plan-closeout
 data_class: public | internal
 created_at: YYYY-MM-DDTHH:mm:ss+00:00
 review_due: YYYY-MM-DD | null
@@ -44,4 +47,4 @@ supersedes: null
 
 Promotion является проверяемым change set и считается завершенным только после target backlink, заполненных `applied_at` и `authority_ref`, пустых unresolved conflicts и зеленого strict gate.
 
-Для `type: method` дополнительно обязательны `domain: mastery`, `claim_key: method.<id>`, `target_ref: mastery/local/INDEX.md#зарегистрированные-расширения`, `confidence: medium | high`, непустой `review_due` и learning evidence по [knowledge contract](../INDEX.md#обучаемые-методы). Method candidate не изменяет skill или local mastery автоматически.
+Для `type: method` дополнительно обязательны `domain: mastery`, `method_kind: heuristic | checklist | workflow | standard`, короткий `method_summary`, непустой `method_applies_to` из [`mastery/INTENTS.json`](../../mastery/INTENTS.json), `claim_key: method.<id>`, `target_ref: mastery/local/INDEX.md#зарегистрированные-расширения`, `confidence: medium | high`, непустой `review_due` и learning evidence по [knowledge contract](../INDEX.md#обучаемые-методы). Для остальных типов method-поля остаются `null`, `null`, `[]`. Method candidate не изменяет Skill или Local Mastery автоматически.

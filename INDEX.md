@@ -1,50 +1,50 @@
-# Карта нового проекта
+# Карта Codex-first проекта
 
 ## Начало
 
-- [`README.md`](README.md) - быстрый старт и навигация.
-- [`CODEX-INSTALL-PROMPT.md`](CODEX-INSTALL-PROMPT.md) - copy-paste установка нового GitHub repository через Codex.
-- [`PROJECT.md`](PROJECT.md) - паспорт, границы, статус и критерии проекта.
-- [`AGENTS.md`](AGENTS.md) - локальные инструкции Codex.
-- [`ai-clone/INDEX.md`](ai-clone/INDEX.md) - минимальный project-local профиль владельца и правила сотрудничества.
-- [`prompts/README.md`](prompts/README.md) - короткие интервью и copy-paste промты для значимых доменов.
+- [`README.md`](README.md) - установка и первый рабочий цикл.
+- [`CODEX-INSTALL-PROMPT.md`](CODEX-INSTALL-PROMPT.md) - готовый prompt установки из Git.
+- [`PROJECT.md`](PROJECT.md) - паспорт, границы и статус.
+- [`AGENTS.md`](AGENTS.md) - маршрутизация Codex, Plan v2 и safety.
+- [`ai-clone/INDEX.md`](ai-clone/INDEX.md) - обезличиваемый профиль сотрудничества.
+- [`prompts/README.md`](prompts/README.md) - компактные доменные prompts.
 
-## Предметные зоны
+## Знания и работа
 
-- [`idea/INDEX.md`](idea/INDEX.md) - путь от сигнала проблемы к проверяемой идее и MVP.
-- [`business/INDEX.md`](business/INDEX.md) - продукт, аудитория, экономика, маркетинг и живые метрики.
-- [`analysis/INDEX.md`](analysis/INDEX.md) - рабочие прогоны, аналитический контракт и handoff в предметный канон.
-- [`inbox/README.md`](inbox/README.md) - RAW неизвестного или смешанного домена.
-- [`docs/INDEX.md`](docs/INDEX.md) - архитектурные решения и долговечная документация.
-- [`plans/README.md`](plans/README.md) - планы больших функций.
-- [`retrospectives/README.md`](retrospectives/README.md) - история значимых рабочих сессий.
-- [`knowledge/INDEX.md`](knowledge/INDEX.md) - маршрутизация, candidates, RAW, provenance и promotion.
-- [`knowledge/graph/INDEX.md`](knowledge/graph/INDEX.md) - производная карта канона, backlinks, orphans и conflicts с Wikilinks.
-- [`mastery/INDEX.md`](mastery/INDEX.md) - project-local методы, переносимые вместе с проектом.
-- [`research/INDEX.md`](research/INDEX.md) - рабочие доказательные запуски конкретного проекта.
-- [`.agents/skills/startup-researcher/SKILL.md`](.agents/skills/startup-researcher/SKILL.md) - исполняемый процесс исследования.
-- [`.agents/skills/knowledge-curator/SKILL.md`](.agents/skills/knowledge-curator/SKILL.md) - knowledge closeout и promotion.
-- [`.agents/skills/it-analysis/SKILL.md`](.agents/skills/it-analysis/SKILL.md) - бизнес- и системный анализ, требования, модели, ТЗ и review.
-- [`scripts/README.md`](scripts/README.md) - инициализация и проверка структуры.
+- [`idea/INDEX.md`](idea/INDEX.md) - гипотезы, evidence, PoV, MVP и риски.
+- [`product/INDEX.md`](product/INDEX.md) - продукт, пользователи, опыт и capabilities.
+- [`business/INDEX.md`](business/INDEX.md) - бизнес-архитектура, экономика, продвижение и метрики.
+- [`docs/architecture/INDEX.md`](docs/architecture/INDEX.md) - технический контекст и границы.
+- [`docs/codebase/INDEX.md`](docs/codebase/INDEX.md) - фактическая карта реализации и команд.
+- [`docs/decisions/README.md`](docs/decisions/README.md) - ADR и последствия выбора.
+- [`plans/INDEX.md`](plans/INDEX.md) - производный индекс текущих и завершенных plans.
+- [`knowledge/INDEX.md`](knowledge/INDEX.md) - candidates, provenance, closeout и promotion.
+- [`knowledge/graph/INDEX.md`](knowledge/graph/INDEX.md) - производная карта активного канона и backlinks.
+- [`mastery/INDEX.md`](mastery/INDEX.md) - Researcher и Local Mastery.
+- [`research/INDEX.md`](research/INDEX.md) - evidence runs.
+- [`inbox/README.md`](inbox/README.md) - единая RAW-приемная и маршрут к [`inbox/raw/`](inbox/raw/README.md).
+- [`retrospectives/README.md`](retrospectives/README.md) - необязательная история инцидентов и крупных выпусков.
+
+## Skills и scripts
+
+- [`.agents/skills/project-delivery/SKILL.md`](.agents/skills/project-delivery/SKILL.md) - реализация через сохраняемый Plan v2.
+- [`.agents/skills/knowledge-curator/SKILL.md`](.agents/skills/knowledge-curator/SKILL.md) - closeout, candidates и разрешенный promotion.
+- [`.agents/skills/startup-researcher/SKILL.md`](.agents/skills/startup-researcher/SKILL.md) - доказательное исследование.
+- [`scripts/README.md`](scripts/README.md) - инициализация, generators и gates.
 
 ## Минимальные маршруты
 
-| Задача | Читать |
+| Задача | Начать с |
 |---|---|
 | Понять проект | `PROJECT.md` |
-| Понять предпочтения владельца | `ai-clone/CORE.md`, только если профиль активирован |
-| Заполнить значимую зону через интервью | `prompts/README.md`, затем выбранный доменный prompt |
-| Прочитать текущие выводы об идее | `idea/INDEX.md` и нужный канонический файл |
-| Собрать новое evidence об идее | `research/INDEX.md`, затем `$startup-researcher` |
-| Понять аудиторию или предложение | `business/INDEX.md` и тематический README |
-| Выполнить бизнес- или системный анализ | `analysis/INDEX.md`, `analysis/CONTRACT.md`, затем `$it-analysis` |
-| Найти утвержденные требования и модели | `business/analysis/INDEX.md` или `docs/analysis/INDEX.md` |
-| Сохранить разрешенный project-local RAW | `knowledge/INDEX.md`, затем `inbox/raw/` или `business/raw/` |
-| Продвинуть проверенный вывод | `knowledge/INDEX.md`, затем `$knowledge-curator` |
-| Найти связанные артефакты и backlinks | `knowledge/graph/INDEX.md`, затем owner artifact |
-| Найти принятое решение | accepted-файл в `docs/decisions/` |
-| Найти состояние большой работы | активный файл в `plans/` |
-| Понять историю | `retrospectives/` |
-| Исследовать нишу или идею | `mastery/researcher/INDEX.md`, затем `$startup-researcher` |
-| Выбрать метод анализа | `mastery/analyst/INDEX.md`, затем `$it-analysis` |
-| Найти evidence и решение запуска | `research/INDEX.md` и нужный каталог в `research/runs/` |
+| Продолжить значимую работу | `plans/INDEX.md`, затем active plan и Resume checkpoint |
+| Запланировать реализацию | `prompts/plan-and-deliver.md` и `$project-delivery` |
+| Заполнить профиль | `prompts/ai-clone-interview.md` |
+| Проверить идею | `prompts/idea-validation.md` и `$startup-researcher` |
+| Заполнить продукт | `prompts/product-interview.md` |
+| Заполнить бизнес | `prompts/business-architecture-interview.md` |
+| Инвентаризировать систему | `prompts/architecture-codebase-inventory.md` |
+| Найти принятое решение | accepted ADR в `docs/decisions/` |
+| Сохранить RAW | `knowledge/INDEX.md`, затем `inbox/raw/` |
+| Создать или применить знание | `knowledge/INDEX.md`, затем `$knowledge-curator` |
+| Создать Local Mastery | `prompts/create-mastery.md`, затем candidate lifecycle |

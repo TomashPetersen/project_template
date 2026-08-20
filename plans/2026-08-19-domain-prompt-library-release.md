@@ -24,7 +24,7 @@ blocked_reason: null
 
 ## Цель
 
-Добавить в переносимый шаблон короткие готовые промты для заполнения ключевых зон проекта, связать их из README и выпустить проверяемый GitHub Template release `1.6.2` в repository `TomashPetersen/project_template`.
+Добавить в переносимый шаблон короткие готовые промты для заполнения ключевых зон проекта, связать их из README и выпустить проверяемый GitHub Template release `1.6.2` в канонический template repository.
 
 ## Границы
 

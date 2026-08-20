@@ -14,25 +14,12 @@ Set-StrictMode -Version Latest
 
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $utf8Strict = [System.Text.UTF8Encoding]::new($false, $true)
+$harnessRoot = Split-Path -Parent $PSScriptRoot
+Import-Module (Join-Path $harnessRoot 'scripts/lib/ModelProject.Platform.psm1') -Force
 $fixturePrefix = 'ModelProjectPrivacy-'
 $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ($fixturePrefix + [guid]::NewGuid().ToString('N'))
 $harnessExitCode = 1
 $caseResults = [System.Collections.Generic.List[object]]::new()
-
-function ConvertTo-ProcessArgument {
-    param(
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
-        [switch]$AllowLineBreaks
-    )
-
-    if ($Value.IndexOf([char]0) -ge 0 -or
-        (-not $AllowLineBreaks -and $Value -match "[`r`n]")) {
-        throw 'HARNESS-UNSAFE-CHILD-ARGUMENT'
-    }
-    if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
-    return '"' + $Value.Replace('"', '\"') + '"'
-}
 
 function Invoke-PowerShellChild {
     param(
@@ -56,14 +43,21 @@ function Invoke-PowerShellChild {
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $hostPath
-    $startInfo.Arguments = (($allArguments | ForEach-Object {
-        ConvertTo-ProcessArgument -Value ([string]$_) -AllowLineBreaks:$AllowLineBreakArguments
-    }) -join ' ')
+    foreach ($argument in $allArguments) {
+        $value = [string]$argument
+        if ($value.IndexOf([char]0) -ge 0 -or
+            (-not $AllowLineBreakArguments -and $value -match '[\r\n]')) {
+            throw 'HARNESS-UNSAFE-CHILD-ARGUMENT'
+        }
+        [void]$startInfo.ArgumentList.Add($value)
+    }
     $startInfo.WorkingDirectory = $WorkingDirectory
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $utf8NoBom
+    $startInfo.StandardErrorEncoding = $utf8NoBom
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -147,12 +141,12 @@ function Copy-PortableSeed {
         if (-not (Test-SafeRelativePath -RelativePath $relative) -or -not $seen.Add($relative)) {
             throw 'HARNESS-MANIFEST-PATH-UNSAFE'
         }
-        $source = Join-Path $SourceRoot $relative.Replace('/', '\')
+        $source = Join-Path $SourceRoot $relative
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
             throw 'HARNESS-MANIFEST-FILE-MISSING'
         }
         Assert-NotReparsePoint -Path $source
-        $destination = Join-Path $SeedRoot $relative.Replace('/', '\')
+        $destination = Join-Path $SeedRoot $relative
         $destinationParent = Split-Path -Parent $destination
         if (-not (Test-Path -LiteralPath $destinationParent -PathType Container)) {
             New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
@@ -164,7 +158,7 @@ function Copy-PortableSeed {
         if (-not (Test-SafeRelativePath -RelativePath $relative) -or -not $seen.Add($relative)) {
             throw 'HARNESS-MANIFEST-PATH-UNSAFE'
         }
-        New-Item -ItemType Directory -Path (Join-Path $SeedRoot $relative.Replace('/', '\')) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $SeedRoot $relative) -Force | Out-Null
     }
 }
 
@@ -214,7 +208,8 @@ function Test-SafeFixtureRoot {
     $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/')
     $actualParent = [System.IO.Path]::GetFullPath((Split-Path -Parent $canonical)).TrimEnd([char[]]'\/')
     $leaf = Split-Path -Leaf $canonical
-    if (-not $actualParent.Equals($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $comparison = Get-ModelProjectPathComparison -Path $tempRoot
+    if (-not $actualParent.Equals($tempRoot, $comparison) -or
         $leaf -cnotmatch ('^' + [regex]::Escape($fixturePrefix) + '[0-9a-f]{32}$')) {
         return $false
     }
@@ -272,8 +267,8 @@ $Body
 function Test-RawTemplateOracle {
     param([Parameter(Mandatory = $true)][string]$SeedRoot)
 
-    foreach ($relative in @('inbox/raw/TEMPLATE.md', 'business/raw/TEMPLATE.md')) {
-        $path = Join-Path $SeedRoot $relative.Replace('/', '\')
+    foreach ($relative in @('inbox/raw/TEMPLATE.md')) {
+        $path = Join-Path $SeedRoot $relative
         $text = (Read-Utf8Strict -Path $path).Replace("`r`n", "`n")
         if (-not $text.StartsWith("---`n", [System.StringComparison]::Ordinal)) { return $false }
         $end = $text.IndexOf("`n---`n", 4, [System.StringComparison]::Ordinal)
@@ -327,7 +322,7 @@ function Invoke-IsolatedVerifierCase {
     $treeBefore = Get-TreeHashSnapshot -Path $caseRoot
     $arguments = @('-Root', $caseRoot)
     if ($Report) { $arguments += '-Report' }
-    $verifier = Join-Path $caseRoot 'scripts\verify-knowledge.ps1'
+    $verifier = Join-Path $caseRoot 'scripts/verify-knowledge.ps1'
     $result = Invoke-PowerShellChild -ScriptPath $verifier -Arguments $arguments -WorkingDirectory $caseRoot -Timeout $TimeoutSeconds
     $treeAfter = Get-TreeHashSnapshot -Path $caseRoot
     $diagnostic = $result.Stdout + "`n" + $result.Stderr
@@ -396,7 +391,7 @@ function Invoke-RawCase {
     $writeUtf8Fixture = ${function:Write-Utf8Fixture}
     $arrange = {
         param($caseRoot)
-        & $writeUtf8Fixture -Path (Join-Path $caseRoot ('inbox\raw\' + $fixtureName)) -Content $fixtureContent
+        & $writeUtf8Fixture -Path (Join-Path $caseRoot ('inbox/raw/' + $fixtureName)) -Content $fixtureContent
     }.GetNewClosure()
     Invoke-IsolatedVerifierCase -Name $Name -SeedRoot $SeedRoot -Arrange $arrange -ExpectBlocked $ExpectBlocked `
         -ExpectedDiagnostic $ExpectedDiagnostic -ForbiddenEchoes $ForbiddenEchoes -Report:$Report
@@ -405,7 +400,7 @@ function Invoke-RawCase {
 function Get-CandidateFinalFiles {
     param([Parameter(Mandatory = $true)][string]$Root)
 
-    $candidateRoot = Join-Path $Root 'knowledge\candidates'
+    $candidateRoot = Join-Path $Root 'knowledge/candidates'
     if (-not (Test-Path -LiteralPath $candidateRoot -PathType Container)) { return @() }
     return @(
         Get-ChildItem -LiteralPath $candidateRoot -Recurse -File -Filter 'KC-*.md' -Force
@@ -432,7 +427,7 @@ function Invoke-PublicCandidateGenerator {
         [Parameter(Mandatory = $true)][int]$Timeout
     )
 
-    $generator = Join-Path $CaseRoot 'scripts\new-knowledge-candidate.ps1'
+    $generator = Join-Path $CaseRoot 'scripts/new-knowledge-candidate.ps1'
     $arguments = @(
         '-Root', $CaseRoot,
         '-Type', 'fact',
@@ -521,7 +516,7 @@ function Invoke-GeneratorSafetyCase {
         return
     }
     $beforeVerify = Get-TreeHashSnapshot -Path $caseRoot
-    $verifyResult = Invoke-PowerShellChild -ScriptPath (Join-Path $caseRoot 'scripts\verify-knowledge.ps1') `
+    $verifyResult = Invoke-PowerShellChild -ScriptPath (Join-Path $caseRoot 'scripts/verify-knowledge.ps1') `
         -Arguments @('-Root', $caseRoot) -WorkingDirectory $caseRoot -Timeout $TimeoutSeconds
     $afterVerify = Get-TreeHashSnapshot -Path $caseRoot
     if ($verifyResult.TimedOut -or $verifyResult.ExitCode -ne 0 -or
@@ -545,10 +540,10 @@ function Invoke-InvalidRootRedactionCase {
     $invalidLeaf = 'A42InvalidRoot@example.invalid-api_key=A42InvalidRootQuerySecret'
     $invalidRoot = Join-Path $fixtureRoot $invalidLeaf
     $scriptPath = if ($VerifierKind -ceq 'knowledge') {
-        Join-Path $caseRoot 'scripts\verify-knowledge.ps1'
+        Join-Path $caseRoot 'scripts/verify-knowledge.ps1'
     }
     else {
-        Join-Path $caseRoot 'scripts\verify-structure.ps1'
+        Join-Path $caseRoot 'scripts/verify-structure.ps1'
     }
     $arguments = @('-Root', $invalidRoot)
     if ($VerifierKind -ceq 'knowledge') { $arguments += '-Report' }
@@ -592,7 +587,7 @@ function Invoke-BadMarkdownTargetRedactionCase {
     Copy-Item -LiteralPath $SeedRoot -Destination $caseRoot -Recurse
     $email = 'A42MissingTarget@example.invalid'
     $querySecret = 'A42MissingTargetQuerySecret'
-    $indexPath = Join-Path $caseRoot 'knowledge\INDEX.md'
+    $indexPath = Join-Path $caseRoot 'knowledge/INDEX.md'
     $indexText = Read-Utf8Strict -Path $indexPath
     $badTarget = "missing/$email.md?api_key=$querySecret"
     $mutated = $indexText.Replace('(candidates/TEMPLATE.md)', "($badTarget)")
@@ -602,10 +597,10 @@ function Invoke-BadMarkdownTargetRedactionCase {
     Write-Utf8Fixture -Path $indexPath -Content $mutated
 
     $scriptPath = if ($VerifierKind -ceq 'knowledge') {
-        Join-Path $caseRoot 'scripts\verify-knowledge.ps1'
+        Join-Path $caseRoot 'scripts/verify-knowledge.ps1'
     }
     else {
-        Join-Path $caseRoot 'scripts\verify-structure.ps1'
+        Join-Path $caseRoot 'scripts/verify-structure.ps1'
     }
     $arguments = @('-Root', $caseRoot)
     if ($VerifierKind -ceq 'knowledge') { $arguments += '-Report' }
@@ -650,7 +645,7 @@ try {
     $seedRoot = Join-Path $fixtureRoot 'generated-seed'
     Copy-PortableSeed -SourceRoot $sourceRoot -SeedRoot $seedRoot
 
-    $initializer = Join-Path $seedRoot 'scripts\initialize-project.ps1'
+    $initializer = Join-Path $seedRoot 'scripts/initialize-project.ps1'
     $initializeResult = Invoke-PowerShellChild -ScriptPath $initializer -Arguments @(
         '-ProjectName', 'Privacy Public CLI Fixture',
         '-ProjectSlug', 'privacy-public-cli-fixture',
@@ -663,7 +658,7 @@ try {
     }
 
     $seedBefore = Get-TreeHashSnapshot -Path $seedRoot
-    $seedVerifier = Join-Path $seedRoot 'scripts\verify-knowledge.ps1'
+    $seedVerifier = Join-Path $seedRoot 'scripts/verify-knowledge.ps1'
     $seedResult = Invoke-PowerShellChild -ScriptPath $seedVerifier -Arguments @('-Root', $seedRoot) `
         -WorkingDirectory $seedRoot -Timeout $TimeoutSeconds
     $seedAfter = Get-TreeHashSnapshot -Path $seedRoot
@@ -819,9 +814,9 @@ try {
         $writeUtf8Fixture = ${function:Write-Utf8Fixture}
         $arrange = {
             param($caseRoot)
-            $runRoot = Join-Path $caseRoot 'research\runs\2026-08-01-privacy-a38'
+            $runRoot = Join-Path $caseRoot 'research/runs/2026-08-01-privacy-a38'
             New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
-            $templateRoot = Join-Path $caseRoot '.agents\skills\startup-researcher\assets\run-template'
+            $templateRoot = Join-Path $caseRoot '.agents/skills/startup-researcher/assets/run-template'
             foreach ($name in @('brief.md', 'queries.md', 'evidence.jsonl', 'candidates.md', 'red-team.md', 'decision.md')) {
                 Copy-Item -LiteralPath (Join-Path $templateRoot $name) -Destination (Join-Path $runRoot $name)
             }
@@ -835,25 +830,25 @@ try {
         $surfaceCases = @(
             [pscustomobject]@{
                 Name = 'A38-candidate-template-sensitive-scan'
-                Relative = 'knowledge\candidates\TEMPLATE.md'
+                Relative = 'knowledge/candidates/TEMPLATE.md'
                 Sentinel = 'A38CandidateTemplate@example.invalid'
                 Line = 'Synthetic contact: A38CandidateTemplate@example.invalid'
             },
             [pscustomobject]@{
                 Name = 'A38-raw-template-sensitive-scan'
-                Relative = 'inbox\raw\TEMPLATE.md'
+                Relative = 'inbox/raw/TEMPLATE.md'
                 Sentinel = 'A38RawTemplateSecret0123456789'
                 Line = 'api_key=A38RawTemplateSecret0123456789'
             },
             [pscustomobject]@{
                 Name = 'A38-raw-readme-sensitive-scan'
-                Relative = 'business\raw\README.md'
+                Relative = 'inbox/raw/README.md'
                 Sentinel = 'A38RawReadme@example.invalid'
                 Line = 'Synthetic contact: A38RawReadme@example.invalid'
             },
             [pscustomobject]@{
                 Name = 'A38-local-index-sensitive-scan'
-                Relative = 'mastery\local\INDEX.md'
+                Relative = 'mastery/local/INDEX.md'
                 Sentinel = 'A38LocalIndexCookieSentinel0123456789'
                 Line = 'Cookie: session=A38LocalIndexCookieSentinel0123456789'
             }
@@ -914,10 +909,10 @@ try {
         $safeSurfaceArrange = {
             param($caseRoot)
             foreach ($relative in @(
-                'knowledge\candidates\TEMPLATE.md',
-                'inbox\raw\TEMPLATE.md',
-                'business\raw\README.md',
-                'mastery\local\INDEX.md'
+                'knowledge/candidates/TEMPLATE.md',
+                'inbox/raw/TEMPLATE.md',
+                'inbox/raw/README.md',
+                'mastery/local/INDEX.md'
             )) {
                 $path = Join-Path $caseRoot $relative
                 $text = Read-Utf8Strict -Path $path

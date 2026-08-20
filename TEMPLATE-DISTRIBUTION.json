@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "distribution_kind": "source-placeholder",
-  "template_version": "1.6.2",
+  "template_version": "2.0.0",
   "source_tag": null,
   "source_commit": null,
   "template_repository_url": null,

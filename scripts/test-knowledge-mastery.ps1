@@ -608,11 +608,10 @@ function Set-BaselineMutation {
 
 function Add-BaselineIndexDrift {
     param(
-        [Parameter(Mandatory = $true)][string]$Root,
-        [ValidateSet('researcher', 'analyst')][string]$BaselineRoot = 'researcher'
+        [Parameter(Mandatory = $true)][string]$Root
     )
 
-    $relative = "mastery/$BaselineRoot/INDEX.md"
+    $relative = 'mastery/researcher/INDEX.md'
     $path = Join-Path $Root $relative.Replace('/', '\')
     $content = [System.IO.File]::ReadAllText($path, $utf8Strict).TrimEnd()
     [System.IO.File]::WriteAllText(
@@ -625,11 +624,16 @@ function Add-BaselineIndexDrift {
 function Register-LocalMethod {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$FileName
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [Parameter(Mandatory = $true)][string]$CandidateRelative
     )
     $path = Join-Path $Root 'mastery\local\INDEX.md'
     $text = [System.IO.File]::ReadAllText($path, $utf8Strict).TrimEnd()
-    [System.IO.File]::WriteAllText($path, $text + "`n`n- [Harness method $FileName]($FileName)`n", $utf8NoBom)
+    [System.IO.File]::WriteAllText(
+        $path,
+        $text + "`n`n- [Harness method $FileName]($FileName)`n- [Harness candidate](../../$CandidateRelative)`n",
+        $utf8NoBom
+    )
 }
 
 function Write-LocalMethod {
@@ -641,10 +645,64 @@ function Write-LocalMethod {
         [string]$VerifiedAt = '2026-07-01',
         [string]$ReviewDue = '2099-12-31',
         [AllowNull()][string]$Supersedes = $null,
-        [string[]]$AppliesTo = @('deep-dive'),
+        [string[]]$AppliesTo = @('planning'),
         [switch]$Register,
         [switch]$MissingMetadata
     )
+
+    $candidateHashBytes = [System.Security.Cryptography.SHA256]::HashData(
+        $utf8NoBom.GetBytes("$MethodId|$FileName")
+    )
+    $candidateSuffix = [Convert]::ToHexString($candidateHashBytes).Substring(0, 8).ToLowerInvariant()
+    $candidateId = "KC-20260820-120000-$candidateSuffix"
+    $candidateRelative = "knowledge/candidates/2026/$candidateId.md"
+    $appliesToYaml = [string]::Join("`n", @($AppliesTo | ForEach-Object { "  - $_" }))
+    $summary = "Fixture method $MethodId."
+    Write-FixtureText -Root $Root -RelativePath $candidateRelative -Content @"
+---
+id: '$candidateId'
+state: applied
+type: method
+owner_scope: project
+domain: mastery
+method_kind: checklist
+method_summary: '$summary'
+method_applies_to:
+$appliesToYaml
+claim_key: 'method.$MethodId'
+target_ref: 'mastery/local/INDEX.md#зарегистрированные-расширения'
+source_refs:
+  - PROJECT.md
+conflict_refs: []
+confidence: high
+capture_basis: explicit-user-capture
+data_class: internal
+created_at: '2026-08-19T00:00:00+00:00'
+review_due: '$ReviewDue'
+authority_ref: 'user-request:mastery-harness-$candidateSuffix'
+applied_at: '2026-08-19T00:00:01+00:00'
+dismiss_reason: null
+supersedes: null
+---
+
+# Fixture method $MethodId
+
+## Основание
+
+Прямая коррекция владельца подтверждает повторяемый fixture method.
+
+## Предлагаемое изменение
+
+Применить один bounded шаг и проверить результат.
+
+## Проверка дублей и противоречий
+
+Совпадающий active method отсутствует.
+
+## Обоснование lifecycle
+
+Candidate применен с прямым authority владельца.
+"@
 
     if ($MissingMetadata) {
         $content = @"
@@ -660,16 +718,18 @@ Fixture intentionally omits required metadata.
     }
     else {
         $supersedesYaml = if ($null -eq $Supersedes) { 'null' } else { $Supersedes }
-        $appliesToYaml = [string]::Join("`n", @($AppliesTo | ForEach-Object { "  - $_" }))
         $content = @"
 ---
+mastery_contract_version: 2
 method_id: $MethodId
+method_kind: checklist
+summary: '$summary'
 owner_scope: project
 applies_to:
 $appliesToYaml
 status: $Status
 source_refs:
-  - https://example.com/method-evidence
+  - $candidateRelative
 verified_at: '$VerifiedAt'
 review_due: '$ReviewDue'
 supersedes: $supersedesYaml
@@ -681,7 +741,9 @@ Use one bounded observation and record the result.
 "@
     }
     Write-FixtureText -Root $Root -RelativePath "mastery/local/$FileName" -Content $content
-    if ($Register) { Register-LocalMethod -Root $Root -FileName $FileName }
+    if ($Register) {
+        Register-LocalMethod -Root $Root -FileName $FileName -CandidateRelative $candidateRelative
+    }
 }
 
 function Write-OverdueResearchRun {
@@ -798,6 +860,9 @@ function Invoke-CandidateGenerator {
         Basis = 'Проверяемый synthetic fixture без чувствительных данных.'
         ProposedChange = 'Зафиксировать безопасный project-local метод.'
         DuplicateCheck = 'Совпадающий claim key отсутствует.'
+        MethodKind = 'checklist'
+        MethodSummary = 'Проверяемый project-local checklist для fixture.'
+        MethodAppliesTo = @('planning')
         ReviewDue = '2099-12-31'
         AuthorityRef = "user-request:mastery-harness-$CaseId"
         WriteIntent = 'explicit-promotion'
@@ -947,12 +1012,14 @@ try {
         }
     }
 
-    Invoke-VerifierCase -Name 'A69 analyst baseline INDEX hash drift blocks without manifest update' -ExpectedExitCode 1 -StdoutPatterns @(
+    Invoke-VerifierCase -Name 'A69 removed analyst baseline root blocks' -ExpectedExitCode 1 -StdoutPatterns @(
         '(?m)^FAIL: semantic knowledge gate',
-        '(?m)^- Mastery baseline drift: mastery/analyst/INDEX\.md '
+        '(?i)unsafe mastery baseline path'
     ) -Arrange {
         param($root)
-        Add-BaselineIndexDrift -Root $root -BaselineRoot analyst
+        $manifest = Read-FixtureManifest -Root $root
+        $manifest.mastery_baseline.files[0].path = 'mastery/analyst/INDEX.md'
+        Write-FixtureManifest -Root $root -Manifest $manifest
     }
 
     Invoke-VerifierCase -Name 'A69 unknown baseline root blocks' -ExpectedExitCode 1 -StdoutPatterns @(
@@ -1005,46 +1072,41 @@ try {
         param($root)
         $verified = [datetime]::Today.AddDays(-1).ToString('yyyy-MM-dd')
         $due = [datetime]::Today.AddYears(1).ToString('yyyy-MM-dd')
-        Write-LocalMethod -Root $root -FileName 'valid.md' -MethodId 'fixture-valid-method' -VerifiedAt $verified -ReviewDue $due -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-valid-method.md' -MethodId 'fixture-valid-method' -VerifiedAt $verified -ReviewDue $due -Register
     }
 
-    Invoke-VerifierCase -Name 'A74 all 18 analysis applies_to intents pass' -ExpectedExitCode 0 -StdoutPatterns @(
+    Invoke-VerifierCase -Name 'A74 all catalog applies_to intents pass' -ExpectedExitCode 0 -StdoutPatterns @(
         '(?m)^PASS: semantic knowledge gate\.\r?$'
     ) -Arrange {
         param($root)
-        $analysisIntents = @(
-            'stakeholder-analysis', 'requirements-elicitation', 'business-process-analysis', 'as-is-to-be',
-            'gap-analysis', 'business-rule-analysis', 'use-case-modeling', 'functional-requirements',
-            'nonfunctional-requirements', 'data-analysis', 'integration-analysis', 'api-contract-analysis',
-            'traceability', 'change-impact-analysis', 'acceptance-criteria', 'specification-authoring',
-            'specification-review', 'requirements-validation'
-        )
-        Write-LocalMethod -Root $root -FileName 'analysis-intents.md' -MethodId 'fixture-analysis-intents' -AppliesTo $analysisIntents -Register
+        $catalog = Get-Content -LiteralPath (Join-Path $root 'mastery/INTENTS.json') -Raw | ConvertFrom-Json
+        $catalogIntents = @($catalog.intents | ForEach-Object { [string]$_.id })
+        Write-LocalMethod -Root $root -FileName 'fixture-all-intents.md' -MethodId 'fixture-all-intents' -AppliesTo $catalogIntents -Register
     }
 
-    Invoke-VerifierCase -Name 'A74 near-miss analysis applies_to intent blocks' -ExpectedExitCode 1 -StdoutPatterns @(
+    Invoke-VerifierCase -Name 'A74 near-miss catalog applies_to intent blocks' -ExpectedExitCode 1 -StdoutPatterns @(
         '(?m)^FAIL: semantic knowledge gate',
-        "(?i)unknown applies_to 'requirements-validation-near-miss'"
+        "(?i)unknown applies_to 'planning-near-miss'"
     ) -Arrange {
         param($root)
-        Write-LocalMethod -Root $root -FileName 'near-miss.md' -MethodId 'fixture-near-miss' -AppliesTo @('requirements-validation-near-miss') -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-near-miss.md' -MethodId 'fixture-near-miss' -AppliesTo @('planning-near-miss') -Register
     }
 
     Invoke-VerifierCase -Name 'A74 one-way local replacement passes' -ExpectedExitCode 0 -StdoutPatterns @(
         '(?m)^PASS: semantic knowledge gate\.\r?$'
     ) -Arrange {
         param($root)
-        Write-LocalMethod -Root $root -FileName 'method-v1.md' -MethodId 'fixture-method-v1' -Status superseded -Register
-        Write-LocalMethod -Root $root -FileName 'method-v2.md' -MethodId 'fixture-method-v2' -Status active -Supersedes 'fixture-method-v1' -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-method-v1.md' -MethodId 'fixture-method-v1' -Status superseded -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-method-v2.md' -MethodId 'fixture-method-v2' -Status active -Supersedes 'fixture-method-v1' -Register
     }
 
     Invoke-VerifierCase -Name 'A74 one-way local replacement chain passes' -ExpectedExitCode 0 -StdoutPatterns @(
         '(?m)^PASS: semantic knowledge gate\.\r?$'
     ) -Arrange {
         param($root)
-        Write-LocalMethod -Root $root -FileName 'method-v1.md' -MethodId 'fixture-chain-v1' -Status superseded -Register
-        Write-LocalMethod -Root $root -FileName 'method-v2.md' -MethodId 'fixture-chain-v2' -Status superseded -Supersedes 'fixture-chain-v1' -Register
-        Write-LocalMethod -Root $root -FileName 'method-v3.md' -MethodId 'fixture-chain-v3' -Status active -Supersedes 'fixture-chain-v2' -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-chain-v1.md' -MethodId 'fixture-chain-v1' -Status superseded -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-chain-v2.md' -MethodId 'fixture-chain-v2' -Status superseded -Supersedes 'fixture-chain-v1' -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-chain-v3.md' -MethodId 'fixture-chain-v3' -Status active -Supersedes 'fixture-chain-v2' -Register
     }
 
     Invoke-VerifierCase -Name 'A74 superseded method without replacement blocks' -ExpectedExitCode 1 -StdoutPatterns @(
@@ -1073,14 +1135,14 @@ try {
     }
 
     Invoke-VerifierCase -Name 'A75 overdue local extension appears in report' -ExpectedExitCode 0 -Report -StdoutPatterns @(
-        '(?m)^- overdue: 1$',
-        '(?m)^  - mastery/local/overdue\.md -> \d{4}-\d{2}-\d{2}$',
+        '(?m)^- overdue: 2$',
+        '(?m)^  - mastery/local/fixture-overdue-method\.md -> \d{4}-\d{2}-\d{2}$',
         '(?m)^PASS: semantic knowledge gate\.\r?$'
     ) -Arrange {
         param($root)
         $verified = [datetime]::Today.AddDays(-10).ToString('yyyy-MM-dd')
         $due = [datetime]::Today.AddDays(-1).ToString('yyyy-MM-dd')
-        Write-LocalMethod -Root $root -FileName 'overdue.md' -MethodId 'fixture-overdue-method' -VerifiedAt $verified -ReviewDue $due -Register
+        Write-LocalMethod -Root $root -FileName 'fixture-overdue-method.md' -MethodId 'fixture-overdue-method' -VerifiedAt $verified -ReviewDue $due -Register
     }
 
     Invoke-VerifierCase -Name 'A75 overdue local extension cannot be used by researcher' -ExpectedExitCode 1 -StdoutPatterns @(
@@ -1090,8 +1152,8 @@ try {
         param($root)
         $verified = [datetime]::Today.AddDays(-10).ToString('yyyy-MM-dd')
         $due = [datetime]::Today.AddDays(-1).ToString('yyyy-MM-dd')
-        Write-LocalMethod -Root $root -FileName 'overdue.md' -MethodId 'fixture-overdue-method' -VerifiedAt $verified -ReviewDue $due -Register
-        Write-OverdueResearchRun -Root $root -MethodId 'fixture-overdue-method' -MethodFileName 'overdue.md'
+        Write-LocalMethod -Root $root -FileName 'fixture-overdue-method.md' -MethodId 'fixture-overdue-method' -VerifiedAt $verified -ReviewDue $due -Register
+        Write-OverdueResearchRun -Root $root -MethodId 'fixture-overdue-method' -MethodFileName 'fixture-overdue-method.md'
     }
 
     Invoke-GeneratorCase `

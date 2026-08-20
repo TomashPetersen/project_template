@@ -12,9 +12,8 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$Description,
 
-    [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string]$Owner,
+    [string]$Owner = 'project-owner',
 
     [switch]$InitializeGit,
 
@@ -33,16 +32,23 @@ trap {
     else {
         'initialization-rejected'
     }
-    if ([string]::IsNullOrWhiteSpace([string]$MyInvocation.ScriptName)) {
-        try { [Console]::Error.WriteLine("ERROR: $safeCode") }
-        catch { }
-        exit 1
-    }
-    throw $safeCode
+    try { [Console]::Error.WriteLine("ERROR: $safeCode") }
+    catch { }
+    exit 1
 }
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$platformModulePath = Join-Path $PSScriptRoot 'lib/ModelProject.Platform.psm1'
+Import-Module $platformModulePath -Force
+$nullDevice = Get-ModelProjectNullDevice
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
+Assert-ModelProjectInputText -Value $ProjectName -Field ProjectName -MaxLength 120 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()_+&/\-]{0,119}$'
+Assert-ModelProjectInputText -Value $ProjectSlug -Field ProjectSlug -MaxLength 63 -Pattern '^[a-z0-9][a-z0-9-]*$'
+Assert-ModelProjectInputText -Value $Description -Field Description -MaxLength 500 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()_+&%/''"\-]{0,499}$'
+Assert-ModelProjectInputText -Value $Owner -Field Owner -MaxLength 80 -Pattern '^[\p{L}\p{N}][\p{L}\p{N} ._+\-]{0,79}$'
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 $manifestMaxBytes = 1MB
@@ -59,18 +65,7 @@ if (($InitializeGit -and $FromGitHubTemplate) -or (-not $InitializeGit -and -not
 function Assert-NoReparseChain {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
-    $full = [System.IO.Path]::GetFullPath($AbsolutePath)
-    $pathRoot = [System.IO.Path]::GetPathRoot($full)
-    $current = $pathRoot
-    $relative = $full.Substring($pathRoot.Length)
-    foreach ($segment in (($relative -split '[\\/]') | Where-Object { $_ -ne '' })) {
-        $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) { break }
-        $item = Get-Item -LiteralPath $current -Force
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Путь содержит reparse point: $current"
-        }
-    }
+    Assert-ModelProjectNoLinkInFullChain -Path $AbsolutePath
 }
 
 function Test-PathWithinControlledRoot {
@@ -79,94 +74,19 @@ function Test-PathWithinControlledRoot {
         [Parameter(Mandatory = $true)][string]$ControlledRoot
     )
 
-    $candidate = [System.IO.Path]::GetFullPath($CandidatePath).TrimEnd([char[]]'\/')
-    $root = [System.IO.Path]::GetFullPath($ControlledRoot).TrimEnd([char[]]'\/')
-    return (
-        $candidate.Equals($root, [System.StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.StartsWith($root + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
-    )
+    return (Test-ModelProjectPathWithinRoot -Root $ControlledRoot -Path $CandidatePath -AllowEqual)
 }
 
 function Get-TrustedGitExecutable {
     param([Parameter(Mandatory = $true)][string[]]$ControlledRoots)
 
-    $command = Get-Command -Name 'git.exe' -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $command) {
-        $command = Get-Command -Name 'git' -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-    }
-    if ($null -eq $command -or [string]::IsNullOrWhiteSpace([string]$command.Source)) {
-        throw 'Доверенный Git executable не найден.'
-    }
-
-    try { $path = [System.IO.Path]::GetFullPath([string]$command.Source) }
-    catch { throw 'Доверенный Git executable имеет некорректный путь.' }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('git.exe', 'git') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'Доверенный Git executable не прошел проверку имени и типа.'
-    }
-    Assert-NoReparseChain $path
-    foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-PathWithinControlledRoot -CandidatePath $path -ControlledRoot $controlledRoot) {
-            throw 'Git executable не может находиться внутри управляемого корня проекта.'
-        }
-    }
-    return $path
+    return (Get-ModelProjectGitExecutable -ControlledRoots $ControlledRoots)
 }
 
 function Get-TrustedCurrentPowerShellHost {
     param([Parameter(Mandatory = $true)][string[]]$ControlledRoots)
 
-    try { $path = [System.IO.Path]::GetFullPath((Get-Process -Id $PID -ErrorAction Stop).MainModule.FileName) }
-    catch { throw 'Не удалось точно определить текущий PowerShell host.' }
-    if ([System.IO.Path]::GetFileName($path) -cnotin @('powershell.exe', 'pwsh.exe') -or
-        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'Текущий PowerShell host не прошел проверку имени и типа.'
-    }
-    Assert-NoReparseChain $path
-    foreach ($controlledRoot in $ControlledRoots) {
-        if (Test-PathWithinControlledRoot -CandidatePath $path -ControlledRoot $controlledRoot) {
-            throw 'PowerShell host не может находиться внутри управляемого корня проекта.'
-        }
-    }
-    return $path
-}
-
-function ConvertTo-SanitizedProcessArgument {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
-
-    if ($Value.IndexOf([char]0) -ge 0 -or $Value -match '[\r\n]') {
-        throw 'Аргумент дочернего процесса содержит запрещенный символ.'
-    }
-    if ($Value.Length -eq 0) { return '""' }
-    if ($Value -notmatch '[\s"]') { return $Value }
-
-    $builder = [System.Text.StringBuilder]::new()
-    [void]$builder.Append('"')
-    $backslashes = 0
-    foreach ($character in $Value.ToCharArray()) {
-        if ($character -eq '\') {
-            $backslashes++
-            continue
-        }
-        if ($character -eq '"') {
-            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
-            [void]$builder.Append('"')
-            $backslashes = 0
-            continue
-        }
-        if ($backslashes -gt 0) {
-            [void]$builder.Append(('\' * $backslashes))
-            $backslashes = 0
-        }
-        [void]$builder.Append($character)
-    }
-    if ($backslashes -gt 0) {
-        [void]$builder.Append(('\' * ($backslashes * 2)))
-    }
-    [void]$builder.Append('"')
-    return $builder.ToString()
+    return (Get-ModelProjectPowerShellHost -ControlledRoots $ControlledRoots)
 }
 
 function Invoke-SanitizedProcess {
@@ -175,56 +95,10 @@ function Invoke-SanitizedProcess {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $Executable
-    $startInfo.Arguments = (($Arguments | ForEach-Object {
-        ConvertTo-SanitizedProcessArgument -Value ([string]$_)
-    }) -join ' ')
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $null = $startInfo.EnvironmentVariables
-    $environment = $startInfo.Environment
-    if ($null -eq $environment) {
-        throw 'Окружение дочернего процесса недоступно.'
-    }
-    foreach ($name in @($environment.Keys)) {
-        if (([string]$name).StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]$environment.Remove([string]$name)
-        }
-    }
-    $isPowerShellHost = [System.IO.Path]::GetFileName($Executable) -cin @('powershell.exe', 'pwsh.exe')
-    if ($isPowerShellHost) {
-        $startInfo.StandardOutputEncoding = $utf8NoBom
-        $startInfo.StandardErrorEncoding = $utf8NoBom
-    }
-    else {
-        $environment['GIT_CONFIG_NOSYSTEM'] = '1'
-        $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
-        $environment['GIT_CONFIG_SYSTEM'] = 'NUL'
-    }
-
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    try {
-        if (-not $process.Start()) {
-            throw 'Не удалось запустить дочерний процесс.'
-        }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $output = [System.Collections.Generic.List[string]]::new()
-        foreach ($streamText in @($stdoutTask.Result, $stderrTask.Result)) {
-            foreach ($line in @($streamText -split '\r?\n')) {
-                if ($line.Length -gt 0) { $output.Add($line) | Out-Null }
-            }
-        }
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Output = @($output) }
-    }
-    finally {
-        $process.Dispose()
-    }
+    $isGit = [System.IO.Path]::GetFileName($Executable) -cin @('git', 'git.exe')
+    $result = Invoke-ModelProjectProcess -Executable $Executable -Arguments $Arguments -GitEnvironment:$isGit
+    if ($result.LimitExceeded) { throw 'Дочерний процесс превысил лимит вывода.' }
+    return [pscustomobject]@{ ExitCode = $result.ExitCode; Output = @($result.Output) }
 }
 
 function Read-BoundedUtf8File {
@@ -376,7 +250,7 @@ function Get-PayloadHashEntries {
         if (-not (Test-ManifestRelativePath $relativePath)) {
             throw 'Manifest содержит небезопасный portable path.'
         }
-        $absolutePath = Join-Path $repoRoot $relativePath.Replace('/', '\')
+        $absolutePath = Join-Path $repoRoot $relativePath
         $entries.Add([ordered]@{
             path = $relativePath
             sha256 = Get-BoundedFileSha256 -LiteralPath $absolutePath -MaxBytes $descriptorMaxBytes -Label $relativePath
@@ -458,7 +332,7 @@ function Assert-DescriptorShape {
         }
         $seen[$relativePath.ToLowerInvariant()] = $true
         $actualHash = Get-BoundedFileSha256 `
-            -LiteralPath (Join-Path $repoRoot $relativePath.Replace('/', '\')) `
+            -LiteralPath (Join-Path $repoRoot $relativePath) `
             -MaxBytes $descriptorMaxBytes `
             -Label $relativePath
         if ($actualHash -cne $expectedHash) {
@@ -495,7 +369,7 @@ function Invoke-RepositoryGit {
     $result = Invoke-SanitizedProcess -Executable $gitExe -Arguments (@(
         '-c', "safe.directory=$repoRoot",
         '-c', 'core.fsmonitor=false',
-        '-c', 'core.hooksPath=NUL',
+        '-c', "core.hooksPath=$nullDevice",
         '-c', 'core.quotePath=false',
         '-C', $repoRoot
     ) + $Arguments)
@@ -518,7 +392,7 @@ function Assert-GitHubTemplateRepository {
     }
     try { $reportedRoot = [System.IO.Path]::GetFullPath([string]$topLevelLines[0]).TrimEnd([char[]]'\/') }
     catch { throw 'Existing Git repository вернул некорректный root.' }
-    if (-not $reportedRoot.Equals($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $reportedRoot.Equals($repoRoot, $script:repoPathComparison)) {
         throw 'Инициализация разрешена только в корне existing Git repository.'
     }
 
@@ -570,7 +444,7 @@ function Write-AtomicUtf8File {
     )
 
     $fullTarget = [System.IO.Path]::GetFullPath($TargetPath)
-    if (-not $fullTarget.StartsWith($repoRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $fullTarget.StartsWith($repoRoot + [System.IO.Path]::DirectorySeparatorChar, $script:repoPathComparison)) {
         throw "Atomic write выходит за корень проекта: $fullTarget"
     }
     $targetParent = [System.IO.Path]::GetDirectoryName($fullTarget)
@@ -604,7 +478,7 @@ function Write-AtomicUtf8File {
         if (Test-Path -LiteralPath $temporaryPath -PathType Leaf) {
             $actualParent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($temporaryPath))
             $actualLeaf = [System.IO.Path]::GetFileName($temporaryPath)
-            if ($actualParent.Equals($targetParent, [System.StringComparison]::OrdinalIgnoreCase) -and
+            if ($actualParent.Equals($targetParent, $script:repoPathComparison) -and
                 $actualLeaf -match '^\.codex-init-[0-9a-f]{32}\.tmp$') {
                 [System.IO.File]::Delete($temporaryPath)
             }
@@ -612,7 +486,7 @@ function Write-AtomicUtf8File {
         if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
             $actualBackupParent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($backupPath))
             $actualBackupLeaf = [System.IO.Path]::GetFileName($backupPath)
-            if ($actualBackupParent.Equals($targetParent, [System.StringComparison]::OrdinalIgnoreCase) -and
+            if ($actualBackupParent.Equals($targetParent, $script:repoPathComparison) -and
                 $actualBackupLeaf -match '^\.codex-init-[0-9a-f]{32}\.bak$') {
                 [System.IO.File]::Delete($backupPath)
             }
@@ -644,7 +518,7 @@ function Write-AtomicBytesFile {
     )
 
     $fullTarget = [System.IO.Path]::GetFullPath($TargetPath)
-    if (-not $fullTarget.StartsWith($repoRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $fullTarget.StartsWith($repoRoot + [System.IO.Path]::DirectorySeparatorChar, $script:repoPathComparison)) {
         throw 'Rollback write выходит за корень проекта.'
     }
     $targetParent = [System.IO.Path]::GetDirectoryName($fullTarget)
@@ -677,7 +551,7 @@ function Write-AtomicBytesFile {
             if (-not (Test-Path -LiteralPath $cleanupPath -PathType Leaf)) { continue }
             $cleanupParent = [System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($cleanupPath))
             $cleanupLeaf = [System.IO.Path]::GetFileName($cleanupPath)
-            if ($cleanupParent.Equals($targetParent, [System.StringComparison]::OrdinalIgnoreCase) -and
+            if ($cleanupParent.Equals($targetParent, $script:repoPathComparison) -and
                 $cleanupLeaf -match '^\.codex-rollback-[0-9a-f]{32}\.(?:tmp|bak)$') {
                 [System.IO.File]::Delete($cleanupPath)
             }
@@ -716,9 +590,9 @@ function Remove-ExactInitializationArtifact {
 
     $fullTarget = [System.IO.Path]::GetFullPath($TargetPath).TrimEnd([char[]]'\/')
     $expectedTarget = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $ExpectedLeaf)).TrimEnd([char[]]'\/')
-    if (-not $fullTarget.Equals($expectedTarget, [System.StringComparison]::OrdinalIgnoreCase) -or
+    if (-not $fullTarget.Equals($expectedTarget, $script:repoPathComparison) -or
         [System.IO.Path]::GetFileName($fullTarget) -cne $ExpectedLeaf -or
-        -not ([System.IO.Path]::GetDirectoryName($fullTarget)).Equals($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        -not ([System.IO.Path]::GetDirectoryName($fullTarget)).Equals($repoRoot, $script:repoPathComparison)) {
         throw 'Отказ от rollback неожиданного пути.'
     }
     Assert-NoReparseChain $repoRoot
@@ -743,6 +617,7 @@ function Remove-ExactInitializationArtifact {
 $repoRootCandidate = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char[]]'\/')
 Assert-NoReparseChain $repoRootCandidate
 $repoRoot = (Resolve-Path -LiteralPath $repoRootCandidate).Path.TrimEnd([char[]]'\/')
+$script:repoPathComparison = Get-ModelProjectPathComparison -Path $repoRoot
 $projectPath = Join-Path $repoRoot 'PROJECT.md'
 $manifestPath = Join-Path $repoRoot '.template-manifest.json'
 $readmePath = Join-Path $repoRoot 'README.md'
@@ -933,6 +808,20 @@ $originalReadmeBytes = Read-BoundedFileBytes -LiteralPath $readmePath -MaxBytes 
 $originalDescriptorBytes = Read-BoundedFileBytes -LiteralPath $descriptorPath -MaxBytes $descriptorMaxBytes -Label 'TEMPLATE-DISTRIBUTION.json'
 $originalLicenseBytes = Read-BoundedFileBytes -LiteralPath $templateLicenseSourcePath -MaxBytes $licenseMaxBytes -Label 'LICENSE'
 $originalNoticesBytes = Read-BoundedFileBytes -LiteralPath $templateNoticesSourcePath -MaxBytes $licenseMaxBytes -Label 'THIRD-PARTY-NOTICES.md'
+$planIndexer = Join-Path $repoRoot 'scripts/update-plan-index.ps1'
+$planIndexPath = Join-Path $repoRoot 'plans/INDEX.md'
+foreach ($planInput in @($planIndexer, $planIndexPath)) {
+    if (-not (Test-Path -LiteralPath $planInput -PathType Leaf)) { throw "Обязательный Plan v2 файл не найден: $planInput" }
+    Assert-NoReparseChain $planInput
+}
+$originalPlanIndexBytes = Read-BoundedFileBytes -LiteralPath $planIndexPath -MaxBytes 2MB -Label 'plans/INDEX.md'
+$masteryIndexer = Join-Path $repoRoot 'scripts/update-mastery-index.ps1'
+$masteryIndexPath = Join-Path $repoRoot 'mastery/local/INDEX.md'
+foreach ($masteryInput in @($masteryIndexer, $masteryIndexPath)) {
+    if (-not (Test-Path -LiteralPath $masteryInput -PathType Leaf)) { throw "Обязательный Mastery v2 файл не найден: $masteryInput" }
+    Assert-NoReparseChain $masteryInput
+}
+$originalMasteryIndexBytes = Read-BoundedFileBytes -LiteralPath $masteryIndexPath -MaxBytes 2MB -Label 'mastery/local/INDEX.md'
 $gitMetadataPath = Join-Path $repoRoot '.git'
 $gitMetadataAbsentBeforeMutation = -not (Test-Path -LiteralPath $gitMetadataPath)
 $publicationBegan = $false
@@ -955,7 +844,7 @@ try {
         $gitResult = Invoke-SanitizedProcess -Executable $gitExe -Arguments @(
             '-c', "safe.directory=$repoRoot",
             '-c', 'core.fsmonitor=false',
-            '-c', 'core.hooksPath=NUL',
+            '-c', "core.hooksPath=$nullDevice",
             '-c', 'core.quotePath=false',
             '-C', $repoRoot,
             'init', '-b', 'main'
@@ -965,15 +854,29 @@ try {
         }
     }
 
+    $planIndexResult = Invoke-SanitizedProcess -Executable $powershellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $planIndexer,
+        '-Root', $repoRoot, '-Mode', 'Write'
+    )
+    if ($planIndexResult.ExitCode -ne 0) { throw 'Не удалось пересобрать plans/INDEX.md после инициализации.' }
+
+    $masteryIndexResult = Invoke-SanitizedProcess -Executable $powershellExe -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $masteryIndexer,
+        '-Root', $repoRoot, '-Mode', 'Write'
+    )
+    if ($masteryIndexResult.ExitCode -ne 0) { throw 'Не удалось пересобрать mastery/local/INDEX.md после инициализации.' }
+
     Assert-NoReparseChain $repoRoot
     $verifyResult = Invoke-SanitizedProcess -Executable $powershellExe -Arguments @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $verifier,
         '-Root', $repoRoot, '-Mode', 'GeneratedProject'
     )
-    foreach ($line in $verifyResult.Output) { Write-Host ([string]$line) }
     if ($verifyResult.ExitCode -ne 0) {
         throw 'Инициализация не прошла проверку GeneratedProject.'
     }
+    foreach ($line in $planIndexResult.Output) { Write-Host ([string]$line) }
+    foreach ($line in $masteryIndexResult.Output) { Write-Host ([string]$line) }
+    foreach ($line in $verifyResult.Output) { Write-Host ([string]$line) }
 }
 catch {
     $originalFailure = $_
@@ -984,6 +887,10 @@ catch {
     catch { $rollbackFailures.Add('README.md') }
     try { Write-AtomicBytesFile -TargetPath $descriptorPath -Bytes $originalDescriptorBytes }
     catch { $rollbackFailures.Add('TEMPLATE-DISTRIBUTION.json') }
+    try { Write-AtomicBytesFile -TargetPath $planIndexPath -Bytes $originalPlanIndexBytes }
+    catch { $rollbackFailures.Add('plans/INDEX.md') }
+    try { Write-AtomicBytesFile -TargetPath $masteryIndexPath -Bytes $originalMasteryIndexBytes }
+    catch { $rollbackFailures.Add('mastery/local/INDEX.md') }
     try { Write-AtomicBytesFile -TargetPath $templateLicenseSourcePath -Bytes $originalLicenseBytes }
     catch { $rollbackFailures.Add('LICENSE') }
     try { Write-AtomicBytesFile -TargetPath $templateNoticesSourcePath -Bytes $originalNoticesBytes }

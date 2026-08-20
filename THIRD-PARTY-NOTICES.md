@@ -4,9 +4,9 @@
 
 The template documents workflows for Codex and links to official OpenAI documentation. OpenAI, ChatGPT and Codex are trademarks of their respective owner. No OpenAI software, service credentials or MCP server is redistributed by this repository.
 
-## Named research and analysis methods
+## Named research methods
 
-Files in `mastery/researcher/` and `mastery/analyst/` contain original summaries and project-specific operating guidance that may mention authors, books, standards or public methods. Those names and underlying works remain the property of their respective owners. The template does not grant rights to reproduce third-party books, standards, articles or proprietary source material.
+Files in `mastery/researcher/` contain original summaries and project-specific operating guidance that may mention authors, books or public methods. Those names and underlying works remain the property of their respective owners. The template does not grant rights to reproduce third-party books, standards, articles or proprietary source material.
 
 ## User-added material
 
