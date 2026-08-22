@@ -35,10 +35,13 @@ blocked_reason: null
 - `test-mastery-v2.ps1`, `verify-knowledge.ps1 -SelfTest`, `test-knowledge-privacy.ps1`, `test-knowledge-mastery.ps1` и `test-knowledge-artifacts.ps1` - PASS; privacy 37/37, Mastery 24/24, artifacts 15/15.
 - `test-knowledge-control-plane.ps1` - P0 PASS; `test-knowledge-research.ps1` - 12/12 PASS.
 - `verify-structure.ps1 -Mode TemplateSource` - PASS, 122 canonical Markdown files; protected overlays 0 diff lines; `git diff --check` PASS.
+- GitHub Actions run `32588891847` для `af2f8784bcef57a74afa818304ac88681efb5580` - SUCCESS, `macos-latest` и `windows-latest` 2/2.
+- Public `main` clone - DistributionTemplate PASS; GitHub Template initialization и GeneratedProject PASS; source-only leaks 0; temp cleanup PASS.
 
 ## Что не получилось или осталось
 
-- Source push, Windows/macOS CI и финальная public clone/init verification выполняются после terminal source closeout.
+- Terminal plan commit требует обычный fast-forward push и повторный live CI gate. Consumer payload, `main`, `v1.6.2` и `v2.0.0` не меняются.
+- GitHub Actions выдал non-blocking warning: `actions/checkout@v4` targets deprecated Node.js 20 и runner принудительно использует Node.js 24. Privacy release остается зеленым; dependency refresh требует отдельной задачи.
 
 ## Как было и как стало
 
@@ -52,5 +55,5 @@ Privacy-аудит обязан разделять remote reachability, local br
 
 - Персональные данные: public refs чисты; local-only private refs удалены; 10 известных private commit/tag objects недоступны после reflog expiry и GC; post-purge scan не находит personal identity/content matches.
 - Контент третьих лиц: новый сторонний контент не добавлялся.
-- Внешние отправки: выполнены только read-only fetch/API audit; push, force push, tag replacement и main mutation отсутствуют.
+- Внешние отправки: выполнены read-only fetch/API audit и один обычный fast-forward push source audit commit; force push, tag replacement и main mutation отсутствуют.
 - Секреты: реальные credentials не читались и не сохранялись.

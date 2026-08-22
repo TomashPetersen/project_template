@@ -4,15 +4,26 @@ plan_contract_version: 2
 plan_id: PLAN-20260822-sanitize-public-history
 task_key: sanitize-public-history
 prompt_ref: prompts/plan-and-deliver.md
-status: in-progress
-current_phase: P4
-updated_at: 2026-08-22T17:42:36Z
-completed_at: null
-closeout_status: pending
-knowledge_outcome: null
+status: complete
+current_phase: null
+updated_at: 2026-08-22T18:17:54Z
+completed_at: 2026-08-22T18:17:54Z
+closeout_status: complete
+knowledge_outcome: none
 candidate_ids: []
-result_refs: []
-affected_canon: []
+result_refs:
+  - .template-manifest.json
+  - TEMPLATE-CHANGELOG.md
+  - TEMPLATE.md
+  - docs/decisions/2026-08-22-public-history-privacy-audit.md
+  - plans/2026-08-22-sanitize-public-history.md
+  - plans/INDEX.md
+  - retrospectives/2026-08-22_public-history-privacy-audit.md
+affected_canon:
+  - .template-manifest.json
+  - TEMPLATE-CHANGELOG.md
+  - TEMPLATE.md
+  - docs/decisions/2026-08-22-public-history-privacy-audit.md
 blocked_reason: null
 ---
 
@@ -46,12 +57,12 @@ blocked_reason: null
 - [x] AC-01 Все reachable commits и annotated tags в публичных refs имеют нейтральные author, committer и tagger identity.
 - [x] AC-02 Исторические деревья не содержат персонализированных copyright-строк, личных email, известных персональных имен или абсолютных локальных user paths.
 - [x] AC-03 Чистые public refs не переписаны; локальная private branch и unpublished tags не отправлены и удалены.
-- [ ] AC-04 Финальный `source` проходит локальные gates и GitHub Actions на Windows и macOS.
+- [x] AC-04 Финальный `source` проходит локальные gates и GitHub Actions на Windows и macOS.
 - [x] AC-05 Существующие published `v1.6.2` и `v2.0.0` подтверждены нейтральными и не перемещены.
-- [ ] AC-06 Производный `main` не содержит source-only audit files, а public clone/init smoke tests проходят.
-- [ ] AC-07 Public forks, pull requests, refs и repository settings повторно проверены; cache/support limitation явно зафиксировано.
+- [x] AC-06 Производный `main` не содержит source-only audit files, а public clone/init smoke tests проходят.
+- [x] AC-07 Public forks, pull requests, refs и repository settings повторно проверены; cache/support limitation явно зафиксировано.
 - [x] AC-08 Старые известные tainted objects недоступны через локальные refs и удалены локальным reflog expiry/GC.
-- [ ] AC-09 Protected overlays не изменены, source worktree чист, plan и retrospective содержат финальные evidence.
+- [x] AC-09 Protected overlays не изменены, source worktree чист, plan и retrospective содержат финальные evidence.
 
 ## Риски, безопасность и откат
 
@@ -107,7 +118,7 @@ Deliverable: neutral public reachability report, удаленные local privat
 - [x] Истечь reflogs, выполнить GC и проверить known tainted object IDs.
 - [x] Запустить полный локальный source gate.
 
-## Фаза P4 - [WIP] Финализация source audit и CI
+## Фаза P4 - [x] Финализация source audit и CI
 
 Цель: закрыть tracked evidence, отправить обычный source fast-forward и дождаться CI.
 
@@ -117,12 +128,12 @@ Deliverable: финальный source audit commit и зеленый Windows/ma
 
 Задачи:
 
-- [ ] Завершить plan closeout и retrospective по фактическому audit/purge.
-- [ ] Создать финальный neutral source commit без portable payload delta.
-- [ ] Отправить финальный source commit и дождаться Windows/macOS CI.
-- [ ] Доказать отсутствие force/tag/main mutations.
+- [x] Завершить plan closeout и retrospective по фактическому audit/purge.
+- [x] Создать финальный neutral source audit commit без portable payload delta.
+- [x] Отправить source audit commit и дождаться Windows/macOS CI.
+- [x] Доказать отсутствие force/tag/main mutations.
 
-## Фаза P5 - [ ] Финальная public verification
+## Фаза P5 - [x] Финальная public verification
 
 Цель: подтвердить неизменность опубликованного release state и работоспособность GitHub Template.
 
@@ -132,10 +143,10 @@ Deliverable: exact refs/settings, public clone/init evidence и clean source wor
 
 Задачи:
 
-- [ ] Подтвердить неизменные neutral `v1.6.2`, `v2.0.0` и consumer `main`.
-- [ ] Выполнить public clone и GitHub Template initialization smoke.
-- [ ] Проверить refs, forks, PR, settings и остаточное GitHub cache limitation.
-- [ ] Подтвердить clean source worktree и protected overlays.
+- [x] Подтвердить неизменные neutral `v1.6.2`, `v2.0.0` и consumer `main`.
+- [x] Выполнить public clone и GitHub Template initialization smoke.
+- [x] Проверить refs, forks, PR, settings и остаточное GitHub cache limitation.
+- [x] Подтвердить clean source worktree и protected overlays.
 
 ## Проверки
 
@@ -151,6 +162,11 @@ Deliverable: exact refs/settings, public clone/init evidence и clean source wor
 - Local purge attempt was rejected by the execution safety reviewer because branch/tag deletion plus reflog expiry/GC irreversibly destroys unpublished history. No partial ref deletion or GC occurred.
 - После явного повторного подтверждения local purge выполнен: private branch и unpublished tags удалены; 7 private commit objects и 3 tag objects имели 0 пересечений с public reachability и недоступны после reflog expiry/GC.
 - Post-purge local scan: 9 reachable commits; bad commit identities 0; bad taggers 0; personal copyright/Gmail/known-name/local-path matches 0; `git fsck --full --no-reflogs --unreachable` выдал 0 строк.
+- Public main smoke: DistributionTemplate PASS with 88 canonical Markdown files; GitHub Template initialization and GeneratedProject PASS with 90 files; source-only leaks 0; temp cleanup PASS.
+- Source CI: GitHub Actions run `32588891847` for exact commit `af2f8784bcef57a74afa818304ac88681efb5580` completed successfully, matrix 2/2: `macos-latest` and `windows-latest`.
+- Remote refs after audit push: `main=7a3e424cd1d4feac02635e5886b29747aadd2fdb`; `source=af2f8784bcef57a74afa818304ac88681efb5580`; published tag objects `v1.6.2=9d3b31830eccc9942f00738246252a07c63748ab`, `v2.0.0=b88038e5b3f61ebb7febe502e8cb5dadd5e97bc3` unchanged.
+- Public repository remains `Public template`; forks 0, prior exact API audit found pull requests 0 and releases 0. Final anonymous REST retry hit rate limiting, so refs were reverified through Git transport and template/fork state through the public GitHub UI.
+- Non-blocking CI warning: `actions/checkout@v4` targets deprecated Node.js 20 and is currently forced by GitHub runner to Node.js 24. It did not affect the green 2/2 result and is outside this privacy-only change.
 - Обязательные финальные проверки: plan/index/resume, structure, privacy, consumer boundary, GitHub distribution, platform, knowledge, mastery, `git diff --check`, reachable-object scan, Windows/macOS CI, public clone/init.
 
 ## Связанные решения
@@ -161,19 +177,20 @@ Deliverable: exact refs/settings, public clone/init evidence и clean source wor
 
 ## Resume checkpoint
 
-- Текущая фаза: P4
-- Уже выполнено: P1-P3 complete. With explicit confirmation, local private branch and unpublished tags were deleted; reflogs expired; GC pruned 10 known private commit/tag objects. Public refs were not mutated.
-- Последние успешные проверки: Post-purge: 9 reachable commits, bad identities/taggers/copyright/Gmail/known-name/local-path matches all 0; fsck unreachable lines 0; v1.6.2 and v2.0.0 refs unchanged.
+- Текущая фаза: нет - план завершен
+- Уже выполнено: P1-P5: exact public audit, local private-ref purge, full regression, source CI, public clone/init and final ref verification.
+- Последние успешные проверки: local/public privacy scans neutral; all local gates PASS; GitHub Actions run 32588891847 SUCCESS for af2f878, macOS and Windows 2/2; public DistributionTemplate and GeneratedProject smoke PASS.
 - Точные рабочие paths: plans/2026-08-22-sanitize-public-history.md; plans/INDEX.md; retrospectives/2026-08-22_public-history-privacy-audit.md; docs/decisions/2026-08-22-public-history-privacy-audit.md; .template-manifest.json; TEMPLATE.md; TEMPLATE-CHANGELOG.md
-- Git checkpoint: v1:12de377718b72d32dcdd6d63cc996b00c961b4b33b6653a954a5f110281dd4ac
-- Следующее действие: Run focused post-purge gates and public clone/init audit, complete plan closeout with outcome none, commit neutral source audit, push source once, await Windows/macOS CI, and perform final remote verification.
-- Блокеры: none
-- Обновлено: 2026-08-22T17:42:36Z
+- Git checkpoint: v1:8fea0091cc9e8d21e39d21e0c9198ac890599708d1e7e94ec21a1bccbf8e7b0c
+- Следующее действие: нет - plan terminal; follow-up требует новый plan_id
+- Блокеры: нет
+- Обновлено: 2026-08-22T18:17:54Z
 
 ## Итог
 
-- Реализовано целиком:
-- Что осталось:
-- Коммиты:
+- Реализовано целиком: public refs доказаны обезличенными; local-only private refs, reflogs и objects удалены; source-only audit contract и evidence записаны; полный local regression, source CI и public GitHub Template smoke прошли.
+- Knowledge closeout: `none` - durable privacy boundary уже выражена accepted ADR и release contracts; полный plan/diff не переносится; `template-source + disabled` запрещает candidate creation.
+- Что осталось вне terminal plan: обычный push terminal plan commit и повторный live CI gate, не меняющие consumer payload, tags или `main`.
+- Коммиты: source audit commit `af2f8784bcef57a74afa818304ac88681efb5580`; terminal plan commit создается после этой записи.
 
 Перед `complete` закрой criteria и фазы, заполни проверки, итог, `result_refs`, closeout и финальный knowledge outcome. Не дублируй остальные machine fields в body.
