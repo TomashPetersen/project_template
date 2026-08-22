@@ -27,6 +27,7 @@
 | legacy:2026-07-31-knowledge-control-plane-hardening | knowledge-control-plane-hardening | - | - | [План: hardening knowledge control plane 1.2.1](2026-07-31-knowledge-control-plane-hardening.md) |
 | legacy:2026-07-29-knowledge-lifecycle-routing | knowledge-lifecycle-routing | - | - | [План: маршрутизация и автонакопление знаний](2026-07-29-knowledge-lifecycle-routing.md) |
 | legacy:2026-08-14-portable-analysis-control-plane | portable-analysis-control-plane | - | - | [План: portable analysis control plane](2026-08-14-portable-analysis-control-plane.md) |
+| PLAN-20260822-publish-v2-github-template | publish-v2-github-template | - | 2026-08-22T09:49:46Z | [План: Публикация GitHub Template v2.0.0 в main](2026-08-22-publish-v2-github-template.md) |
 | PLAN-20260820-release-v2-source-push | release-v2-source-push | - | 2026-08-20T17:21:07Z | [План: Проверочный commit и push ветки source для v2.0.0](2026-08-20-release-v2-source-push.md) |
 | legacy:2026-07-21-startup-researcher | startup-researcher | - | - | [План: проектный startup-researcher](2026-07-21-startup-researcher.md) |
 | legacy:2026-08-01-template-consistency-optimization | template-consistency-optimization | - | - | [План: консистентность и эффективность модельного шаблона](2026-08-01-template-consistency-optimization.md) |
