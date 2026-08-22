@@ -2,7 +2,8 @@
 
 ## 2.0.0 - 2026-08-20
 
-- Breaking: default consumer перестроен вокруг Codex-first workflow и больше не содержит `analysis/`, business/docs analysis, Analyst Mastery, `it-analysis` и специализированные analysis prompts/scripts. Полная v1 остается в неизменяемом `v1.6.2`.
+- Privacy audit 2026-08-22: exact public refs `main`, `source`, `v1.6.2` и `v2.0.0` подтверждены обезличенными. Персональные metadata существовали только в локальной private history и unpublished pre-release tags, которые удалены локально; public branches и tags не переписывались.
+- Breaking: default consumer перестроен вокруг Codex-first workflow и больше не содержит `analysis/`, business/docs analysis, Analyst Mastery, `it-analysis` и специализированные analysis prompts/scripts. Полная v1 остается в неизменяемом обезличенном `v1.6.2`.
 - Добавлены отдельные owners для `product/`, `business/`, `docs/architecture/` и `docs/codebase/` с легким canon contract и детерминированным knowledge graph.
 - Все planning prompts получили `plan_policy`. Plan v2, derived index и Resume checkpoint обеспечивают один tracked plan, фазовое выполнение, drift detection и возобновление после нового чата или compaction.
 - Добавлен project-local `project-delivery`; `knowledge-curator` расширен plan closeout, а automatic promotion по-прежнему запрещен.

@@ -12,7 +12,7 @@
 
 | Plan ID | Task key | Текущая фаза | Обновлено | План |
 |---|---|---|---|---|
-| Пока нет | - | - | - | - |
+| PLAN-20260822-sanitize-public-history | sanitize-public-history | P4 | 2026-08-22T17:42:36Z | [План: Privacy audit публичной Git-истории и local purge](2026-08-22-sanitize-public-history.md) |
 
 ## Сделано
 

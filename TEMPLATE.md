@@ -48,7 +48,7 @@
 - formal-analysis v1: `analysis/`, `business/analysis/`, `docs/analysis/`, `mastery/analyst/`, `it-analysis` и специализированные scripts/prompts;
 - общая база знаний, портфель, глобальные skills, MCP, plugins и credentials.
 
-Полная прежняя реализация formal analysis остается воспроизводимой в неизменяемом теге `v1.6.2`. Автоматической миграции старых generated projects нет.
+Полная прежняя реализация formal analysis остается воспроизводимой в неизменяемом публичном теге `v1.6.2`. [Privacy audit](docs/decisions/2026-08-22-public-history-privacy-audit.md) подтвердил, что его public history обезличена; локальные unpublished pre-release refs не являются частью release. Автоматической миграции старых generated projects нет.
 
 ## Обязательные зоны v2
 
@@ -69,7 +69,7 @@ Destination заранее не должна существовать. Скри�
 ## Выпуск GitHub consumer
 
 1. На ветке `source` заверши tracked plan, knowledge closeout, retrospective и полный local gate. Проверь фактический diff и отсутствие PII, секретов и абсолютных локальных путей.
-2. Только по отдельной команде создай точный release commit и signed или annotated tag `v<template_version>`. Тег `v1.6.2` не изменяй.
+2. Только по отдельной команде создай точный release commit и signed или annotated tag `v<template_version>`. Опубликованные tags не перемещай. Подтвержденный privacy/security incident требует отдельного tracked plan и ADR до любых ref mutations.
 3. Из clean tagged `source` собери payload в новый несуществующий локальный path:
 
 ```powershell
