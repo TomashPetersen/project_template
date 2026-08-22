@@ -10,7 +10,7 @@ retention: YYYY-MM-DD | rule
 source: logical-source-identifier
 rights: user-owned | user-authorized | public-summary | other
 author: unknown
-scope: project
+scope: idea | product | business | architecture | codebase | project
 status: captured | reviewed | rejected | retention-due
 related: []
 ---
@@ -24,6 +24,7 @@ related: []
 ## Классификация
 
 - Факты:
+- Наблюдения:
 - Мнения:
 - Гипотезы:
 - Цитаты и права:

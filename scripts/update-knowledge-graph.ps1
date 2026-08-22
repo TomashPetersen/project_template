@@ -10,6 +10,9 @@ trap {
     $message = [string]$_.Exception.Message
     $code = if ($message -cmatch '^GRAPH:(?<code>[a-z0-9-]+)$') { [string]$Matches['code'] } else { 'internal-validation-error' }
     try { [Console]::Error.WriteLine("FAIL [knowledge-graph]: blocked ($code).") } catch { }
+    if ($code -ceq 'internal-validation-error' -and $VerbosePreference -ceq 'Continue') {
+        try { [Console]::Error.WriteLine("DETAIL [knowledge-graph]: $message") } catch { }
+    }
     exit 1
 }
 
@@ -61,7 +64,48 @@ function Test-EarlyExactPathCase {
 }
 
 $trustedScriptsRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([char[]]'\/')
-$trustedModulePath = [System.IO.Path]::GetFullPath((Join-Path $trustedScriptsRoot 'lib\ModelProject.Knowledge.psm1'))
+$trustedPlatformModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedScriptsRoot, 'lib', 'ModelProject.Platform.psm1')
+)
+if (-not (Test-Path -LiteralPath $trustedPlatformModulePath -PathType Leaf) -or
+    $null -ne (Get-EarlyReparsePoint -AbsolutePath $trustedPlatformModulePath) -or
+    -not (Test-EarlyExactPathCase -AbsolutePath $trustedPlatformModulePath)) {
+    Stop-Graph 'trusted-platform-integrity'
+}
+$trustedPlatformModule = Import-Module -Name $trustedPlatformModulePath -Scope Local -Force -PassThru -ErrorAction Stop
+$trustedPlatformExportNames = @(
+    'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
+    'Get-ModelProjectNullDevice', 'Resolve-ModelProjectPhysicalPath', 'Get-ModelProjectSystemTempRoot',
+    'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
+    'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
+    'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',
+    'Enter-ModelProjectFileLock', 'Exit-ModelProjectFileLock'
+)
+if ($null -eq $trustedPlatformModule -or
+    $trustedPlatformModule.ExportedCommands.Count -ne $trustedPlatformExportNames.Count) {
+    Stop-Graph 'trusted-platform-exports'
+}
+$pathComparisonCommand = $trustedPlatformModule.ExportedCommands['Get-ModelProjectPathComparison']
+$systemTempCommand = $trustedPlatformModule.ExportedCommands['Get-ModelProjectSystemTempRoot']
+if ($null -eq $pathComparisonCommand -or $null -eq $systemTempCommand -or
+    $null -eq $pathComparisonCommand.Module -or $null -eq $systemTempCommand.Module -or
+    -not [System.IO.Path]::GetFullPath([string]$pathComparisonCommand.Module.Path).Equals(
+        $trustedPlatformModulePath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -or
+    -not [System.IO.Path]::GetFullPath([string]$systemTempCommand.Module.Path).Equals(
+        $trustedPlatformModulePath,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+    Stop-Graph 'trusted-platform-exports'
+}
+$script:mppGetPathComparison = $pathComparisonCommand
+$script:mppGetSystemTempRoot = $systemTempCommand
+$bootstrapPathComparison = & $script:mppGetPathComparison -Path $trustedScriptsRoot
+$trustedModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedScriptsRoot, 'lib', 'ModelProject.Knowledge.psm1')
+)
 if (-not (Test-Path -LiteralPath $trustedModulePath -PathType Leaf) -or
     $null -ne (Get-EarlyReparsePoint -AbsolutePath $trustedModulePath) -or
     -not (Test-EarlyExactPathCase -AbsolutePath $trustedModulePath) -or
@@ -83,7 +127,7 @@ foreach ($commandName in $requiredCommands) {
     $command = $trustedModule.ExportedCommands[$commandName]
     if ($null -eq $command -or $command.CommandType -ne [System.Management.Automation.CommandTypes]::Function -or
         $null -eq $command.Module -or
-        -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals($trustedModulePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals($trustedModulePath, $bootstrapPathComparison)) {
         Stop-Graph 'trusted-module-exports'
     }
     $trustedCommands[$commandName] = $command
@@ -197,17 +241,15 @@ function Test-IsServiceMarkdown {
 function Get-InputFiles {
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot, [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.HashSet[string]]$SourceOnly)
     $result = [System.Collections.Generic.List[object]]::new()
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $projectPath = Join-Path $RepositoryRoot 'PROJECT.md'
-    if (Test-Path -LiteralPath $projectPath -PathType Leaf) { $result.Add((Get-Item -LiteralPath $projectPath -Force)) | Out-Null; [void]$seen.Add('PROJECT.md') }
-    foreach ($zone in @('idea', 'business', 'docs/analysis', 'docs/decisions', 'mastery/local', 'knowledge/candidates')) {
-        $directory = Join-Path $RepositoryRoot $zone.Replace('/', '\')
+    $seen = [System.Collections.Generic.HashSet[string]]::new($script:graphPathComparer)
+    foreach ($zone in @('product', 'business', 'docs/architecture', 'docs/codebase', 'docs/decisions', 'mastery/local', 'knowledge/candidates')) {
+        $directory = Join-Path $RepositoryRoot $zone
         if (-not (Test-Path -LiteralPath $directory -PathType Container)) { continue }
         if ($null -ne (& $trustedCommands['Get-ModelProjectReparsePointInFullChain'] -Root $RepositoryRoot -Path $directory)) { Stop-Graph 'reparse-input-zone' }
         foreach ($file in @(Get-ChildItem -LiteralPath $directory -Recurse -File -Filter '*.md' -Force | Sort-Object FullName)) {
             $relative = & $trustedCommands['Get-ModelProjectRepositoryRelativePath'] -Root $RepositoryRoot -Path $file.FullName
             if ($relative -ceq $graphRelativePath -or $SourceOnly.Contains($relative) -or $seen.Contains($relative)) { continue }
-            if ($relative -cmatch '^(?:business|inbox)/raw/' -or $relative -cmatch '^knowledge/candidates/TEMPLATE\.md$') { continue }
+            if ($relative -cmatch '^knowledge/candidates/TEMPLATE\.md$') { continue }
             if (Test-IsServiceMarkdown -Path $relative) { continue }
             if (-not (& $trustedCommands['Test-ModelProjectExactPathCase'] -Root $RepositoryRoot -Path $file.FullName)) { Stop-Graph 'input-case-mismatch' }
             $result.Add($file) | Out-Null
@@ -220,16 +262,20 @@ function Get-InputFiles {
 
 function Test-IncludedNode {
     param([Parameter(Mandatory = $true)][string]$RelativePath, [Parameter(Mandatory = $true)][hashtable]$Data)
-    if ($RelativePath -ceq 'PROJECT.md') { return $true }
     if ($RelativePath -cmatch '^docs/decisions/') { return ([string]$Data.artifact_kind -ceq 'decision' -and [string]$Data.status -ceq 'accepted') }
     if ($RelativePath -cmatch '^mastery/local/') { return ([string]$Data.status -ceq 'active') }
     if ($RelativePath -cmatch '^knowledge/candidates/[0-9]{4}/KC-') { return $true }
-    return ($RelativePath -cmatch '^(?:idea|business|docs/analysis)/')
+    if ([string]$Data.artifact_kind -cne 'canon' -or [string]$Data.status -cne 'active') { return $false }
+    $expectedDomain = if ($RelativePath -cmatch '^product/') { 'product' }
+        elseif ($RelativePath -cmatch '^business/') { 'business' }
+        elseif ($RelativePath -cmatch '^docs/architecture/') { 'architecture' }
+        elseif ($RelativePath -cmatch '^docs/codebase/') { 'codebase' }
+        else { '' }
+    return -not [string]::IsNullOrWhiteSpace($expectedDomain) -and [string]$Data.domain -ceq $expectedDomain
 }
 
 function Get-NodeKind {
     param([Parameter(Mandatory = $true)][string]$RelativePath, [Parameter(Mandatory = $true)][hashtable]$Data)
-    if ($RelativePath -ceq 'PROJECT.md') { return 'project' }
     if ($RelativePath -cmatch '^knowledge/candidates/') { return 'candidate' }
     if ($RelativePath -cmatch '^mastery/local/') { return 'local-method' }
     if ($RelativePath -cmatch '^docs/decisions/') { return 'decision' }
@@ -295,12 +341,19 @@ function Get-SafeEvidenceLabel {
 
 function Build-KnowledgeGraph {
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+    $graphPathComparison = & $script:mppGetPathComparison -Path $RepositoryRoot
+    $script:graphPathComparer = if ($graphPathComparison -eq [System.StringComparison]::OrdinalIgnoreCase) {
+        [System.StringComparer]::OrdinalIgnoreCase
+    }
+    else {
+        [System.StringComparer]::Ordinal
+    }
     $manifestPath = Join-Path $RepositoryRoot '.template-manifest.json'
     $projectPath = Join-Path $RepositoryRoot 'PROJECT.md'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or -not (Test-Path -LiteralPath $projectPath -PathType Leaf)) { Stop-Graph 'missing-project-contract' }
     try { $manifest = Read-SafeText -RepositoryRoot $RepositoryRoot -Path $manifestPath -MaxBytes 1MB | ConvertFrom-Json -ErrorAction Stop }
     catch { Stop-Graph 'invalid-manifest' }
-    $sourceOnly = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $sourceOnly = [System.Collections.Generic.HashSet[string]]::new($script:graphPathComparer)
     foreach ($path in @($manifest.source_only_paths)) { [void]$sourceOnly.Add([string]$path) }
 
     $files = @(Get-InputFiles -RepositoryRoot $RepositoryRoot -SourceOnly $sourceOnly)
@@ -420,7 +473,7 @@ function Build-KnowledgeGraph {
                 (Get-GraphWikilink -RepositoryPath $to.Path -Label $to.Label))) | Out-Null
         }
     }
-    $connected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $connected = [System.Collections.Generic.HashSet[string]]::new($script:graphPathComparer)
     foreach ($edge in $edges) { [void]$connected.Add($edge.From.Path); [void]$connected.Add($edge.To.Path) }
     $lines.Add('') | Out-Null; $lines.Add('## Orphans') | Out-Null; $lines.Add('') | Out-Null
     $orphans = @($nodes | Where-Object { $_.Path -cne 'PROJECT.md' -and -not $connected.Contains($_.Path) } | Sort-Object Key)
@@ -439,7 +492,7 @@ function Build-KnowledgeGraph {
 }
 
 function Get-RepositoryRoot {
-    param([Parameter(Mandatory = $true)][string]$InputRoot)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$InputRoot)
     $candidate = if ([string]::IsNullOrWhiteSpace($InputRoot)) { Split-Path -Parent $trustedScriptsRoot } else { $InputRoot }
     try { $full = [System.IO.Path]::GetFullPath($candidate).TrimEnd([char[]]'\/') } catch { Stop-Graph 'invalid-root' }
     if (-not (Test-Path -LiteralPath $full -PathType Container) -or $null -ne (Get-EarlyReparsePoint -AbsolutePath $full)) { Stop-Graph 'unsafe-root' }
@@ -448,7 +501,7 @@ function Get-RepositoryRoot {
 
 function Write-GraphAtomically {
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot, [Parameter(Mandatory = $true)][string]$Content)
-    $graphPath = Join-Path $RepositoryRoot $graphRelativePath.Replace('/', '\')
+    $graphPath = Join-Path $RepositoryRoot $graphRelativePath
     $graphDirectory = Split-Path -Parent $graphPath
     if ($null -ne (& $trustedCommands['Get-ModelProjectReparsePointInFullChain'] -Root $RepositoryRoot -Path $graphDirectory)) { Stop-Graph 'reparse-graph-path' }
     if (-not (Test-Path -LiteralPath $graphDirectory -PathType Container)) {
@@ -461,7 +514,7 @@ function Write-GraphAtomically {
         if (Test-Path -LiteralPath $graphPath -PathType Leaf) {
             $existing = Read-SafeText -RepositoryRoot $RepositoryRoot -Path $graphPath
             if ($existing -ceq $Content) { return $false }
-            [System.IO.File]::Replace($temporaryPath, $graphPath, $null)
+            [System.IO.File]::Move($temporaryPath, $graphPath, $true)
         }
         else { [System.IO.File]::Move($temporaryPath, $graphPath) }
         return $true
@@ -472,7 +525,7 @@ function Write-GraphAtomically {
 function Invoke-GraphMode {
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot, [Parameter(Mandatory = $true)][string]$SelectedMode)
     $result = Build-KnowledgeGraph -RepositoryRoot $RepositoryRoot
-    $graphPath = Join-Path $RepositoryRoot $graphRelativePath.Replace('/', '\')
+    $graphPath = Join-Path $RepositoryRoot $graphRelativePath
     $fresh = $false
     if (Test-Path -LiteralPath $graphPath -PathType Leaf) {
         $fresh = (Read-SafeText -RepositoryRoot $RepositoryRoot -Path $graphPath) -ceq $result.Content
@@ -500,9 +553,11 @@ function Invoke-GraphMode {
 }
 
 function Invoke-GraphSelfTest {
-    $base = Join-Path ([System.IO.Path]::GetTempPath()) ('ModelProjectGraphSelfTest-' + [guid]::NewGuid().ToString('N'))
-    $expectedPrefix = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) 'ModelProjectGraphSelfTest-'))
-    if (-not [System.IO.Path]::GetFullPath($base).StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { Stop-Graph 'unsafe-selftest-root' }
+    $physicalTemp = & $script:mppGetSystemTempRoot
+    $base = Join-Path $physicalTemp ('ModelProjectGraphSelfTest-' + [guid]::NewGuid().ToString('N'))
+    $expectedPrefix = [System.IO.Path]::GetFullPath((Join-Path $physicalTemp 'ModelProjectGraphSelfTest-'))
+    $tempComparison = & $script:mppGetPathComparison -Path $physicalTemp
+    if (-not [System.IO.Path]::GetFullPath($base).StartsWith($expectedPrefix, $tempComparison)) { Stop-Graph 'unsafe-selftest-root' }
     $junctionPath = $null
     try {
         [System.IO.Directory]::CreateDirectory($base) | Out-Null
@@ -511,17 +566,18 @@ function Invoke-GraphSelfTest {
             '.template-manifest.json' = '{"schema_version":1,"template_version":"1.4.0","portable_files":[],"portable_empty_directories":[],"source_only_paths":[],"generated_forbidden_paths":[],"generated_extension_zones":[],"mastery_baseline":{"bundle_version":"1","verified_at":"2026-08-16","review_due":"2027-02-16","files":[]}}'
             'INDEX.md' = "# Fixture`n"
             'knowledge/INDEX.md' = "# Knowledge`n"
-            'idea/vision.md' = "# Vision`n`n[Metric](../business/life-metrics.md)`n"
-            'business/life-metrics.md' = "# Metrics`n"
+            'product/overview.md' = "---`nartifact_kind: canon`ncanon_contract_version: 1`ndomain: product`nstatus: active`nverified_at: 2026-08-20`nsource_refs: []`n---`n`n# Product`n`n[Business](../business/overview.md)`n"
+            'business/overview.md' = "---`nartifact_kind: canon`ncanon_contract_version: 1`ndomain: business`nstatus: active`nverified_at: 2026-08-20`nsource_refs: []`n---`n`n# Business`n"
             'knowledge/candidates/TEMPLATE.md' = "# Candidate template`n"
         }
         foreach ($entry in $fixtureFiles.GetEnumerator()) {
-            $path = Join-Path $base $entry.Key.Replace('/', '\'); [System.IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
+            $path = Join-Path $base $entry.Key
+            [System.IO.Directory]::CreateDirectory((Split-Path -Parent $path)) | Out-Null
             [System.IO.File]::WriteAllText($path, [string]$entry.Value, $utf8NoBom)
         }
         Invoke-GraphMode -RepositoryRoot $base -SelectedMode 'Write'
         Invoke-GraphMode -RepositoryRoot $base -SelectedMode 'Check'
-        $graphPath = Join-Path $base 'knowledge\graph\INDEX.md'
+        $graphPath = Join-Path $base 'knowledge/graph/INDEX.md'
         $first = [System.IO.File]::ReadAllBytes($graphPath)
         Invoke-GraphMode -RepositoryRoot $base -SelectedMode 'Write'
         $second = [System.IO.File]::ReadAllBytes($graphPath)
@@ -536,7 +592,14 @@ function Invoke-GraphSelfTest {
         [System.IO.Directory]::CreateDirectory($unsafeRoot) | Out-Null
         [System.IO.Directory]::CreateDirectory($junctionTarget) | Out-Null
         $junctionPath = Join-Path $unsafeRoot 'knowledge'
-        New-Item -ItemType Junction -Path $junctionPath -Target $junctionTarget -ErrorAction Stop | Out-Null
+        $linkItemType = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::Windows
+        )) { 'Junction' } else { 'SymbolicLink' }
+        $linkItem = New-Item -ItemType $linkItemType -Path $junctionPath -Target $junctionTarget -ErrorAction Stop
+        $isReparse = ($linkItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+        $isLink = $linkItem.PSObject.Properties.Name -contains 'LinkType' -and
+            [string]$linkItem.LinkType -cin @('SymbolicLink', 'Junction')
+        if (-not ($isReparse -or $isLink)) { Stop-Graph 'link-fixture-not-created' }
         $reparseBlocked = $false
         try { [void](Write-GraphAtomically -RepositoryRoot $unsafeRoot -Content "# Unsafe fixture`n") }
         catch { if ([string]$_.Exception.Message -ceq 'GRAPH:reparse-graph-path') { $reparseBlocked = $true } }

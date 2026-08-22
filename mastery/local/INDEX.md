@@ -1,114 +1,54 @@
 # Local Mastery
 
-Зона расширений, специфичных для одного generated project. В исходном template source и fresh copy она остается пустой, кроме этого индекса. Baseline из [`../researcher/`](../researcher/INDEX.md) и [`../analyst/`](../analyst/INDEX.md) здесь не копируется и не переопределяется.
+Этот файл создается детерминированно командой `scripts/update-mastery-index.ps1`. Не редактируй его вручную.
 
-## Контракт расширения
+Local Mastery хранит только примененные project-local методы. Новый метод сначала проходит candidate lifecycle и отдельное одобрение; автоматического преобразования Mastery в Skill нет.
 
-Каждый Markdown-файл расширения создается из [`TEMPLATE.md`](TEMPLATE.md) и имеет strict frontmatter:
+## Каталог intents
 
-```yaml
----
-method_id: unique-project-method-id
-owner_scope: project
-applies_to:
-  - niche-discovery
-status: active
-source_refs:
-  - relative/source.md
-verified_at: YYYY-MM-DD
-review_due: YYYY-MM-DD
-supersedes: null
----
-```
+Источник - [`../INTENTS.json`](../INTENTS.json). Новую категорию добавляй в каталог, а не в PowerShell-код.
 
-Закрытый список `applies_to`:
-
-| Intent ID | Тип research |
-|---|---|
-| `niche-discovery` | поиск ниш |
-| `idea-comparison` | сравнение идей |
-| `deep-dive` | deep dive |
-| `project-assessment` | оценка существующего проекта |
-| `refresh` | обновление исследования |
-| `external-research-audit` | аудит чужого исследования |
-| `stakeholder-analysis` | stakeholders, интересы, влияние и конфликты |
-| `requirements-elicitation` | выявление источников, потребностей и ограничений |
-| `business-process-analysis` | бизнес-процессы, участники, исключения и метрики |
-| `as-is-to-be` | сравнение текущего и целевого состояния |
-| `gap-analysis` | разрывы, причины, зависимости и варианты закрытия |
-| `business-rule-analysis` | нормативные правила, условия и исключения |
-| `use-case-modeling` | actors, flows и границы use case |
-| `functional-requirements` | проверяемое функциональное поведение |
-| `nonfunctional-requirements` | измеримые NFR и quality attributes |
-| `data-analysis` | данные, сущности, связи и ограничения |
-| `integration-analysis` | системы, потоки и integration boundaries |
-| `api-contract-analysis` | API schemas, errors, auth и compatibility |
-| `traceability` | полнота графа sources -> requirements -> verification |
-| `change-impact-analysis` | влияние изменения по связанным слоям |
-| `acceptance-criteria` | детерминированные критерии приемки |
-| `specification-authoring` | создание SRS, ТЗ и feature specifications |
-| `specification-review` | независимая проверка спецификации |
-| `requirements-validation` | validation полноты, согласованности и testability |
-
-`status` принимает только `active | deprecated | superseded`.
-
-## Инварианты
-
-- `method_id` уникален без учета регистра.
-- `owner_scope` равен только `project`.
-- `applies_to` непустой и содержит только IDs из закрытого списка.
-- `source_refs` непустой; каждый ref безопасен, существует или является разрешенным HTTPS/logical source.
-- `verified_at` является валидной датой и не находится в будущем.
-- `review_due >= verified_at`.
-- `supersedes` направлен от более нового метода к заменяемому: он равен null или существующему `method_id`, не ссылается на себя и не образует цикл.
-- Метод со `status: superseded` обязан иметь хотя бы одну входящую ссылку `supersedes` от другого метода. Его собственный `supersedes` может оставаться null для первой версии или указывать на еще более старый метод в цепочке.
-- Любой метод, на который указывает `supersedes`, имеет `status: superseded`; replacement может оставаться `active` до следующей замены.
-- Файл зарегистрирован обычной Markdown-ссылкой в таблице ниже.
-- Незарегистрированный файл, duplicate ID, missing metadata, broken ref и invalid graph блокируются.
-- Local mastery проходит тот же data-safety scanner, что RAW, candidates и research artifacts.
-
-Overdue extension появляется в report, но не удаляется. Overdue, deprecated и superseded extension не выбирается автоматически.
-
-## Обучаемость без самоизменения
-
-Система предлагает новый метод как обычный knowledge candidate с `type: method`, `domain: mastery`, `claim_key: method.<id>` и точным `target_ref: mastery/local/INDEX.md#зарегистрированные-расширения`.
-
-Candidate допустим только при `confidence: medium | high`, непустом `review_due` и одном из оснований:
-
-1. Два независимых завершенных task/run source.
-2. Явная коррекция оператора с `capture_basis: explicit-user-capture`, `user-request:...` authority и хотя бы одним project source.
-
-Автоматического promotion нет. После прямого одобрения оператора Lead:
-
-1. Создает один файл метода из [`TEMPLATE.md`](TEMPLATE.md).
-2. Добавляет строку в реестр ниже и backlink на applied candidate.
-3. Ставит `review_due` через 180 дней, если оператор не задал другую дату.
-4. Запускает strict verification и обновляет [производный граф знаний](../../knowledge/graph/INDEX.md).
-
-История candidate сохраняется. Просроченный метод не выбирается автоматически и не удаляется.
-
-## Retrieval route
-
-`$startup-researcher` или `$it-analysis` выполняет маршрут в своей baseline-зоне:
-
-1. Прочитать `mastery/INDEX.md`.
-2. Выбрать один основной baseline profile из `mastery/researcher` или `mastery/analyst` согласно workflow.
-3. При необходимости выбрать максимум один дополняющий baseline profile.
-4. Прочитать этот registry.
-5. Открыть максимум одно active, непросроченное и релевантное local extension.
-6. Записать точные baseline refs, local `method_id` и local file ref в research brief и decision.
-
-Verifier проверяет существование, регистрацию, status, dates и method refs. Он не утверждает, что понимает смысловую релевантность extension.
+| Intent ID | Название | Назначение |
+|---|---|---|
+| `architecture` | Архитектура | Проектирование границ, компонентов, данных, интеграций и технических компромиссов. |
+| `business-architecture` | Бизнес-архитектура | Описание ценности, участников, capabilities, процессов, экономики и связей бизнеса. |
+| `collaboration` | Совместная работа | Координация ролей, решений, обратной связи и передачи контекста. |
+| `content` | Контент | Подготовка, проверка и улучшение проектных текстов и материалов. |
+| `debugging` | Диагностика | Воспроизведение дефектов, локализация причин и проверка исправлений. |
+| `deep-dive` | Глубокое исследование | Детальная проверка одной идеи, проблемы, рынка или проектного риска. |
+| `design` | Дизайн | Проектирование пользовательского опыта, интерфейсов и визуальных решений. |
+| `external-research-audit` | Аудит исследования | Независимая проверка внешнего исследования, его evidence, выводов и пробелов. |
+| `idea-comparison` | Сравнение идей | Сопоставление нескольких идей по единому набору evidence и критериев решения. |
+| `implementation` | Реализация | Создание и изменение кода с учетом контрактов, границ и сопровождаемости. |
+| `knowledge-curation` | Курация знаний | Отбор устойчивых выводов, устранение дублей и безопасное обновление канона. |
+| `niche-discovery` | Поиск ниш | Поиск и первичная проверка ниш с наблюдаемой проблемой и доступным сегментом. |
+| `operations` | Эксплуатация | Наблюдаемость, надежность, поддержка, восстановление и операционные процедуры. |
+| `planning` | Планирование | Декомпозиция цели, фаз, критериев приемки, рисков и проверок. |
+| `product` | Продукт | Работа с пользователями, задачами, опытом, capabilities и продуктовой ценностью. |
+| `project-assessment` | Оценка проекта | Оценка перспективности проекта, evidence, рисков и ближайшего проверочного шага. |
+| `refresh` | Обновление исследования | Повторная проверка ранее собранного evidence, дат, изменений и актуальности вывода. |
+| `release` | Выпуск | Подготовка версии, контроль готовности, откат и подтверждение публикации. |
+| `research` | Исследование | Сбор, проверка и синтез evidence для решений и экспериментов. |
+| `review` | Проверка | Независимая оценка корректности, полноты, рисков и влияния изменений. |
+| `security` | Безопасность | Проверка trust boundaries, данных, полномочий, секретов и abuse-сценариев. |
+| `testing` | Тестирование | Выбор проверок, fixtures и evidence для подтверждения поведения системы. |
 
 ## Зарегистрированные расширения
 
-| Method ID | Расширение | Applies to | Проверено | Review due | Статус |
-|---|---|---|---|---|---|
-| Пока нет | - | - | - | - | - |
+| Method ID | Вид | Краткое описание | Intents | Проверено | Review due | Статус | Метод | Candidate |
+|---|---|---|---|---|---|---|---|---|
+| Пока нет | - | - | - | - | - | - | - | - |
+
+## Retrieval route
+
+1. Выбери intent из каталога.
+2. Открой максимум один `active`, непросроченный и релевантный local method.
+3. Зафиксируй `method_id` и точный file ref в plan или research brief.
+4. Не выбирай автоматически `deprecated`, `superseded` или просроченный метод.
 
 ## Маршруты
 
-- [Project Mastery](../INDEX.md) - границы project-local mastery.
-- [Researcher Mastery](../researcher/INDEX.md) - неизменяемый baseline исследовательских методов.
-- [Analyst Mastery](../analyst/INDEX.md) - неизменяемый baseline бизнес- и системного анализа.
-- [Knowledge](../../knowledge/INDEX.md) - candidate и promotion для устойчивого project-local метода.
+- [Project Mastery](../INDEX.md)
+- [Шаблон метода](TEMPLATE.md)
+- [Knowledge lifecycle](../../knowledge/INDEX.md)
+- [Knowledge graph](../../knowledge/graph/INDEX.md)

@@ -63,11 +63,10 @@ intent
 |---|---|---|---|---|---|
 | Ответ, обзор, аудит, диагностика | Любой | Нужный owner | Результат задачи | Нет записи | Возможные candidates только в ответе |
 | Изменить или построить | По `PROJECT.md` | Project | Код или канон | Запрошенный scope | Pre-task snapshot и closeout |
-| Сохранить неизвестный RAW | `initialized`, `active` | Project | RAW | `inbox/raw/` | Прямая capture-команда и authority |
-| Сохранить business RAW | `initialized`, `active` | Project | RAW | `business/raw/` | Прямая capture-команда и authority |
+| Сохранить разрешенный RAW | `initialized`, `active` | Project | RAW | `inbox/raw/` | Прямая capture-команда, scope и authority |
 | Собрать evidence | `initialized`, `active` | Project | Research run | `research/runs/` | `$startup-researcher` |
-| Выполнить бизнес- или системный анализ | `initialized`, `active` | Project | Analysis run | `analysis/runs/` | `$it-analysis` |
-| Передать подтвержденный analysis artifact в канон | `initialized`, `active` | Project | Canonical artifact | `business/analysis/` или `docs/analysis/` | Direct user authority и analysis gate |
+| Выполнить значимое изменение | `active` | Project | Plan, код, tests и docs | `plans/` и stack-native paths | `$project-delivery`, Plan v2 и closeout |
+| Обновить подтвержденный предметный канон | `initialized`, `active` | Project | Canon | `product/`, `business/`, `docs/architecture/` или `docs/codebase/` | Direct authority, candidate/backlink и canon gate |
 | Automatic durable delta | `active + safe-local` с HEAD | Project | Candidate | `knowledge/candidates/` | `$knowledge-curator` |
 | Прямо создать candidate | `initialized + report-only`, `active + report-only` или `active + safe-local` | Project | Candidate | `knowledge/candidates/` | `user-request:...` |
 | Применить candidate | `initialized + report-only`, `active + report-only` или `active + safe-local` | Project | Canon | Разрешенный режимом точный `target_ref` | Authority, backlink и strict gate |
@@ -138,12 +137,13 @@ ready -> applied
 Минимальная обучаемость использует тот же candidate lifecycle, без отдельной базы и без автоматического изменения инструкций. Method candidate обязан иметь:
 
 - `type: method`, `domain: mastery`;
+- `method_kind: heuristic | checklist | workflow | standard`, короткий `method_summary` и непустой `method_applies_to` из [`mastery/INTENTS.json`](../mastery/INTENTS.json);
 - `claim_key: method.<id>`;
 - `target_ref: mastery/local/INDEX.md#зарегистрированные-расширения`;
 - `confidence: medium | high` и непустой `review_due`;
 - либо два независимых завершенных task/run source, либо `capture_basis: explicit-user-capture` с direct `user-request:...` authority и хотя бы одним project source.
 
-Два файла одного run не считаются двумя независимыми источниками. Promotion никогда не выполняется автоматически. После прямого одобрения создается один `mastery/local/<method-id>.md` из [`../mastery/local/TEMPLATE.md`](../mastery/local/TEMPLATE.md), добавляется строка registry и backlink на applied candidate. Если оператор не указал срок, `review_due` равен дате применения плюс 180 дней. Overdue, deprecated и superseded методы исключаются из автоматического выбора.
+Два файла одного run не считаются двумя независимыми источниками. Promotion никогда не выполняется автоматически. После прямого одобрения `scripts/new-mastery.ps1` сначала запускается с `-WhatIf`, затем отдельной командой без него. Он создает один `mastery/local/<method-id>.md`, применяет candidate, пересобирает derived registry и graph, добавляет backlink из registry и запускает gates с rollback при ошибке. Если оператор не указал срок, generator назначает `review_due` через 180 дней. Overdue, deprecated и superseded методы исключаются из автоматического выбора.
 
 ## Review, dismissal и promotion
 
@@ -183,7 +183,7 @@ source -> candidate -> canonical target
 
 [`graph/INDEX.md`](graph/INDEX.md) является tracked deterministic-представлением canonical refs и backlinks. Он ускоряет человеку и skill-ам поиск связанного контекста, но не владеет нормативным текстом и не заменяет frontmatter refs.
 
-В граф входят `PROJECT.md`, idea/business canon, analysis canon, accepted ADR, active `mastery/local` и все knowledge candidates. Research/analysis runs и RAW остаются evidence refs, но не становятся нормативными nodes. Граф содержит обычные переносимые Markdown-ссылки и дополнительные root-relative Wikilinks.
+В граф входят active product/business/architecture/codebase canon, accepted ADR, active `mastery/local` и knowledge candidates. `PROJECT.md`, idea, plans, research runs, RAW и retrospectives остаются owner artifacts или evidence, но не становятся graph nodes. Граф содержит обычные переносимые Markdown-ссылки и дополнительные root-relative Wikilinks.
 
 Публичный контракт:
 

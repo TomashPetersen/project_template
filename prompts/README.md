@@ -2,16 +2,23 @@
 
 Короткие copy-paste entrypoints для заполнения ключевых зон проекта. Перед использованием замени значения в `<УГЛОВЫХ_СКОБКАХ>` и удали неприменимые пункты.
 
-| Задача | Prompt | Канонический домен |
-|---|---|---|
-| Провести рабочее интервью с владельцем | [`ai-clone-interview.md`](ai-clone-interview.md) | [`ai-clone/`](../ai-clone/INDEX.md) |
-| Заполнить паспорт и activation gate | [`project-passport.md`](project-passport.md) | [`PROJECT.md`](../PROJECT.md) |
-| Оформить и ограничить идею | [`idea-validation.md`](idea-validation.md) | [`idea/`](../idea/INDEX.md) |
-| Собрать минимальный business baseline | [`business-baseline.md`](business-baseline.md) | [`business/`](../business/INDEX.md) |
-| Запустить доказательное исследование | [`research-run.md`](research-run.md) | [`research/`](../research/INDEX.md) |
-| Выполнить бизнес- или системный анализ | [`analysis-run.md`](analysis-run.md) | [`analysis/`](../analysis/INDEX.md) |
-| Спланировать значимое изменение | [`decision-and-delivery.md`](decision-and-delivery.md) | [`plans/`](../plans/README.md), [`docs/`](../docs/INDEX.md) |
-| Завершить diff и проверить Local Mastery | [`knowledge-and-mastery.md`](knowledge-and-mastery.md) | [`knowledge/`](../knowledge/INDEX.md), [`mastery/local/`](../mastery/local/INDEX.md) |
+| Задача | Prompt | Plan policy | Владелец результата |
+|---|---|---|---|
+| Провести рабочее интервью с владельцем | [`ai-clone-interview.md`](ai-clone-interview.md) | `none` | [`ai-clone/`](../ai-clone/INDEX.md) |
+| Заполнить паспорт и activation gate | [`project-passport.md`](project-passport.md) | `none` | [`PROJECT.md`](../PROJECT.md) |
+| Оформить и ограничить идею | [`idea-validation.md`](idea-validation.md) | `none` | [`idea/`](../idea/INDEX.md) |
+| Собрать знания о продукте | [`product-interview.md`](product-interview.md) | `none` | [`product/`](../product/INDEX.md) |
+| Описать бизнес и его архитектуру | [`business-architecture-interview.md`](business-architecture-interview.md) | `none` | [`business/`](../business/INDEX.md) |
+| Зафиксировать фактические architecture/codebase | [`architecture-codebase-inventory.md`](architecture-codebase-inventory.md) | `none` | [`docs/`](../docs/INDEX.md) |
+| Запустить доказательное исследование | [`research-run.md`](research-run.md) | `none` | [`research/`](../research/INDEX.md) |
+| Провести read-only review | [`read-only-review.md`](read-only-review.md) | `none` | отчет без записи |
+| Создать Local Mastery candidate | [`create-mastery.md`](create-mastery.md) | `none` | [`knowledge/`](../knowledge/INDEX.md) |
+| Выполнить разрешенное promotion | [`knowledge-promotion.md`](knowledge-promotion.md) | `none` | указанный owner artifact |
+| Спланировать и выполнить значимое изменение | [`plan-and-deliver.md`](plan-and-deliver.md) | `required` | [`plans/`](../plans/README.md) и код |
+| Реализовать feature или bugfix | [`feature-bugfix-delivery.md`](feature-bugfix-delivery.md) | `required` | [`plans/`](../plans/README.md) и код |
+| Выполнить архитектурное изменение | [`architecture-change.md`](architecture-change.md) | `required` | plan, ADR и реализация |
+| Продолжить существующий plan | [`continue-plan.md`](continue-plan.md) | `existing` | `<PLAN_REF>` |
+| Закрыть существующий plan | [`plan-closeout.md`](plan-closeout.md) | `existing` | `<PLAN_REF>` и knowledge outcome |
 
 ## Общие правила
 
@@ -20,6 +27,7 @@
 - Не придумывать факты, evidence, согласие, цены, метрики или решения владельца.
 - Разделять `FACT`, `OBSERVATION`, `HYPOTHESIS`, `OPINION` и `QUOTE`.
 - Перед записью назвать точные target paths; после записи показать diff и проверки.
+- Для `required` сначала создать или найти ровно один tracked Plan v2; для `existing` полностью прочитать переданный `<PLAN_REF>`.
 - Prompt не является разрешением на commit, push, external write, promotion или canonical handoff.
 
 Начать весь проект одним маршрутом можно через [корневой README](../README.md#что-сделать-после-установки).

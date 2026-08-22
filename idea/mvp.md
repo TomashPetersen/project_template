@@ -20,5 +20,5 @@
 
 - [Доказательство ценности](proof-of-value.md)
 - [Риски](risks.md)
-- [Продукт](../business/products/README.md)
+- [Канон продукта](../product/overview.md)
 - [План реализации](../plans/README.md)

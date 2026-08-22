@@ -1,21 +1,18 @@
-# Доказательный Research run
+---
+artifact_kind: codex-prompt
+prompt_contract_version: 1
+plan_policy: none
+---
 
-Используй для нового evidence, которое нельзя надежно получить из текущего канона.
-
-## Готовый prompt
+# Доказательное исследование
 
 ```text
-Используй $startup-researcher. Прочитай AGENTS.md, PROJECT.md, research/INDEX.md,
-idea/INDEX.md и релевантный предметный канон. Создай bounded research run по
-вопросу <ВОПРОС>. До поиска зафиксируй критерии решения, scope, временной срез,
-baseline methods и стоп-условия. Собирай независимые первичные источники,
-отделяй evidence от inference и выполни red-team.
+Используй startup-researcher. Прочитай AGENTS.md, PROJECT.md, INDEX.md,
+research/INDEX.md и релевантный domain INDEX. Сформулируй bounded вопрос,
+decision use, freshness window, критерии evidence, альтернативы и stop conditions.
 
-Сохрани полный обязательный набор run-файлов и итоговое decision. Не меняй idea/
-или business/ автоматически. Если есть durable delta, предложи central candidate
-по knowledge contract, но не выполняй promotion. Не выполняй commit или push.
+Создай один research run по его контракту. Отделяй sources от выводов, проверяй
+даты и противоречия, не записывай PII или секреты. Research run управляет своим
+процессом и не создает implementation plan. Канон и promotion не изменяй без
+отдельного разрешения.
 ```
-
-## Готово, когда
-
-Decision отвечает на исходный вопрос, содержит ограничения evidence и дает следующий проверяемый шаг.

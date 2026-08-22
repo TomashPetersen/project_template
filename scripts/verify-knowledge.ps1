@@ -24,6 +24,22 @@ trap {
 $script:verificationRoot = ''
 $script:currentIssues = $null
 $script:currentReport = $null
+$script:pathComparison = if (
+    [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows
+    )
+) {
+    [System.StringComparison]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparison]::Ordinal
+}
+$script:pathComparer = if ($script:pathComparison -eq [System.StringComparison]::OrdinalIgnoreCase) {
+    [System.StringComparer]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparer]::Ordinal
+}
 $maxEvidenceFileBytes = 16MB
 $maxEvidenceLineChars = 262144
 $maxEvidenceRecordsPerFile = 10000
@@ -63,6 +79,12 @@ $candidateFields = @(
     'dismiss_reason',
     'supersedes'
 )
+$candidateOptionalMethodFields = @(
+    'method_kind',
+    'method_summary',
+    'method_applies_to'
+)
+$candidateAllowedFields = @($candidateFields + $candidateOptionalMethodFields)
 $candidateScalarFields = @(
     'id',
     'state',
@@ -81,6 +103,7 @@ $candidateScalarFields = @(
     'dismiss_reason',
     'supersedes'
 )
+$candidateOptionalMethodScalarFields = @('method_kind', 'method_summary')
 $candidateNullableScalarFields = @(
     'review_due',
     'applied_at',
@@ -178,12 +201,12 @@ function Get-RelativePath {
     param([Parameter(Mandatory = $true)][string]$AbsolutePath)
 
     $full = [System.IO.Path]::GetFullPath($AbsolutePath)
-    if ($full.Equals($script:verificationRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($full.Equals($script:verificationRoot, $script:pathComparison)) {
         return ''
     }
     if (-not $full.StartsWith(
         $script:verificationRoot + [System.IO.Path]::DirectorySeparatorChar,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:pathComparison
     )) {
         return $null
     }
@@ -198,10 +221,10 @@ function Test-PathWithinRoot {
     }
     $full = [System.IO.Path]::GetFullPath($AbsolutePath)
     return (
-        $full.Equals($script:verificationRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+        $full.Equals($script:verificationRoot, $script:pathComparison) -or
         $full.StartsWith(
             $script:verificationRoot + [System.IO.Path]::DirectorySeparatorChar,
-            [System.StringComparison]::OrdinalIgnoreCase
+            $script:pathComparison
         )
     )
 }
@@ -267,13 +290,77 @@ $trustedKnowledgeModulePath = [System.IO.Path]::GetFullPath(
     [System.IO.Path]::Combine($trustedKnowledgeLibRoot, 'ModelProject.Knowledge.psm1')
 )
 $knowledgeModuleIntegrityError = 'Trusted knowledge helper module failed integrity/load check.'
+$trustedPlatformModulePath = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::Combine($trustedKnowledgeLibRoot, 'ModelProject.Platform.psm1')
+)
+if (-not [System.IO.File]::Exists($trustedPlatformModulePath) -or
+    $null -ne (Get-ReparsePointInFullChain $trustedPlatformModulePath) -or
+    @([System.IO.Directory]::EnumerateFiles($trustedKnowledgeLibRoot) | Where-Object {
+        [System.IO.Path]::GetFileName($_) -ceq 'ModelProject.Platform.psm1'
+    }).Count -ne 1) {
+    throw $knowledgeModuleIntegrityError
+}
+try {
+    $trustedPlatformModule = Microsoft.PowerShell.Core\Import-Module `
+        -Name $trustedPlatformModulePath `
+        -Scope Local `
+        -Force `
+        -PassThru `
+        -ErrorAction Stop
+}
+catch { throw $knowledgeModuleIntegrityError }
+$trustedPlatformExportNames = @(
+    'Get-ModelProjectNormalizedFullPath', 'Test-ModelProjectIsWindows', 'Test-ModelProjectIsMacOS',
+    'Get-ModelProjectNullDevice', 'Resolve-ModelProjectPhysicalPath', 'Get-ModelProjectSystemTempRoot',
+    'Get-ModelProjectPathComparison', 'Test-ModelProjectPathWithinRoot',
+    'Get-ModelProjectLinkInFullChain', 'Assert-ModelProjectNoLinkInFullChain',
+    'Get-ModelProjectTrustedApplication', 'Get-ModelProjectGitExecutable', 'Get-ModelProjectPowerShellHost',
+    'Set-ModelProjectSanitizedGitEnvironment', 'Invoke-ModelProjectProcess', 'Assert-ModelProjectInputText',
+    'Enter-ModelProjectFileLock', 'Exit-ModelProjectFileLock'
+)
+if ($null -eq $trustedPlatformModule -or
+    $trustedPlatformModule.ExportedCommands.Count -ne $trustedPlatformExportNames.Count -or
+    -not [System.IO.Path]::GetFullPath([string]$trustedPlatformModule.Path).Equals(
+        $trustedPlatformModulePath,
+        $script:pathComparison
+    )) {
+    throw $knowledgeModuleIntegrityError
+}
+$trustedPlatformCommands = @{}
+foreach ($commandName in $trustedPlatformExportNames) {
+    $command = $trustedPlatformModule.ExportedCommands[$commandName]
+    if ($null -eq $command -or
+        $command.CommandType -ne [System.Management.Automation.CommandTypes]::Function -or
+        $null -eq $command.Module -or
+        -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals(
+            $trustedPlatformModulePath,
+            $script:pathComparison
+        )) {
+        throw $knowledgeModuleIntegrityError
+    }
+    $trustedPlatformCommands[$commandName] = $command
+}
+$script:mppGetGitExecutable = $trustedPlatformCommands['Get-ModelProjectGitExecutable']
+$script:mppGetPowerShellHost = $trustedPlatformCommands['Get-ModelProjectPowerShellHost']
+$script:mppGetNullDevice = $trustedPlatformCommands['Get-ModelProjectNullDevice']
+$script:mppGetSystemTempRoot = $trustedPlatformCommands['Get-ModelProjectSystemTempRoot']
+$script:mppGetPathComparison = $trustedPlatformCommands['Get-ModelProjectPathComparison']
+$script:mppSetGitEnvironment = $trustedPlatformCommands['Set-ModelProjectSanitizedGitEnvironment']
+$script:nullDevice = & $script:mppGetNullDevice
+$script:pathComparison = & $script:mppGetPathComparison -Path $trustedKnowledgeScriptsRoot
+$script:pathComparer = if ($script:pathComparison -eq [System.StringComparison]::OrdinalIgnoreCase) {
+    [System.StringComparer]::OrdinalIgnoreCase
+}
+else {
+    [System.StringComparer]::Ordinal
+}
 if (-not [System.IO.Path]::GetDirectoryName($trustedKnowledgeLibRoot).Equals(
         $trustedKnowledgeScriptsRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:pathComparison
     ) -or
     -not [System.IO.Path]::GetDirectoryName($trustedKnowledgeModulePath).Equals(
         $trustedKnowledgeLibRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:pathComparison
     ) -or
     -not [System.IO.Directory]::Exists($trustedKnowledgeLibRoot) -or
     -not [System.IO.File]::Exists($trustedKnowledgeModulePath) -or
@@ -314,13 +401,15 @@ if ($trustedKnowledgeModules.Count -ne 1 -or
     [string]::IsNullOrWhiteSpace([string]$trustedKnowledgeModules[0].Path) -or
     -not [System.IO.Path]::GetFullPath([string]$trustedKnowledgeModules[0].Path).Equals(
         $trustedKnowledgeModulePath,
-        [System.StringComparison]::OrdinalIgnoreCase
+        $script:pathComparison
     )) {
     throw $knowledgeModuleIntegrityError
 }
 $trustedKnowledgeModule = $trustedKnowledgeModules[0]
 $trustedKnowledgeExportNames = @(
     'Test-ModelProjectFrontMatterScalarValue',
+    'ConvertFrom-ModelProjectSimpleYamlScalar',
+    'Read-ModelProjectSimpleFrontMatterDocument',
     'Test-ModelProjectJsonScalar',
     'ConvertTo-ModelProjectPercentDecodedText',
     'Get-ModelProjectHttpsUrlSafetyFinding',
@@ -352,7 +441,7 @@ foreach ($commandName in $trustedKnowledgeExportNames) {
         [string]::IsNullOrWhiteSpace([string]$command.Module.Path) -or
         -not [System.IO.Path]::GetFullPath([string]$command.Module.Path).Equals(
             $trustedKnowledgeModulePath,
-            [System.StringComparison]::OrdinalIgnoreCase
+            $script:pathComparison
         )) {
         throw $knowledgeModuleIntegrityError
     }
@@ -1074,8 +1163,8 @@ function Test-MarkdownBacklink {
         $pathPart = $destination.Split('#', 2)[0]
         try {
             $decoded = [System.Uri]::UnescapeDataString($pathPart)
-            $resolved = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $TargetPath) $decoded.Replace('/', '\')))
-            if ($resolved.Equals($CandidatePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $resolved = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $TargetPath) $decoded))
+            if ($resolved.Equals($CandidatePath, $script:pathComparison)) {
                 return $true
             }
         }
@@ -1254,46 +1343,17 @@ function Test-ActiveProjectPassport {
 function Test-IsTrustedSelfRoot {
     if ([string]::IsNullOrWhiteSpace($script:verificationRoot)) { return $false }
     $selfRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd([char[]]'\/')
-    return $selfRoot.Equals($script:verificationRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    return $selfRoot.Equals($script:verificationRoot, $script:pathComparison)
 }
 
 function Get-TrustedGitExecutable {
-    $gitCommand = Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($null -eq $gitCommand) {
-        $gitCommand = Get-Command git -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-    }
-    if ($null -eq $gitCommand -or [string]::IsNullOrWhiteSpace([string]$gitCommand.Source)) {
-        return $null
-    }
-    try { $gitPath = [System.IO.Path]::GetFullPath([string]$gitCommand.Source) }
+    try { return (& $script:mppGetGitExecutable -ControlledRoots @($script:verificationRoot)) }
     catch { return $null }
-    if ([System.IO.Path]::GetFileName($gitPath) -cnotin @('git.exe', 'git') -or
-        -not (Test-Path -LiteralPath $gitPath -PathType Leaf) -or
-        $null -ne (Get-ReparsePointInFullChain $gitPath) -or
-        (Test-PathWithinRoot $gitPath)) {
-        return $null
-    }
-    return $gitPath
 }
 
 function Get-TrustedCurrentPowerShellHostPath {
-    try {
-        $hostPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-        if ([string]::IsNullOrWhiteSpace($hostPath)) { return $null }
-        $hostPath = [System.IO.Path]::GetFullPath($hostPath)
-    }
-    catch {
-        return $null
-    }
-    if ([System.IO.Path]::GetFileName($hostPath) -cnotin @('powershell.exe', 'pwsh.exe') -or
-        -not (Test-Path -LiteralPath $hostPath -PathType Leaf) -or
-        $null -ne (Get-ReparsePointInFullChain $hostPath) -or
-        (Test-PathWithinRoot $hostPath)) {
-        return $null
-    }
-    return $hostPath
+    try { return (& $script:mppGetPowerShellHost -ControlledRoots @($script:verificationRoot)) }
+    catch { return $null }
 }
 
 function Get-TrustedGitMetadata {
@@ -1366,7 +1426,7 @@ function Get-TrustedGitMetadata {
         }
         if (-not $backlinkTarget.Equals(
                 [System.IO.Path]::GetFullPath($gitMetadataPath),
-                [System.StringComparison]::OrdinalIgnoreCase
+                $script:pathComparison
             )) {
             return $null
         }
@@ -1395,79 +1455,64 @@ function Invoke-TrustedGitCommand {
         [long]$MaxCharacters = 0
     )
 
-    $savedGitEnvironment = @{}
-    foreach ($name in @([System.Environment]::GetEnvironmentVariables('Process').Keys)) {
-        if ([string]$name -and [string]$name.StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $savedGitEnvironment[[string]$name] = [string][System.Environment]::GetEnvironmentVariable(
-                [string]$name,
-                'Process'
-            )
+    $gitArguments = @(
+        "--git-dir=$([string]$Metadata.GitDirectory)",
+        "--work-tree=$([string]$Metadata.WorkTree)",
+        '-c', 'core.fsmonitor=false',
+        '-c', "core.hooksPath=$script:nullDevice",
+        '-c', 'core.quotePath=false'
+    ) + @($Arguments)
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $GitPath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = $utf8NoBom
+    $startInfo.StandardErrorEncoding = $utf8NoBom
+    $startInfo.WorkingDirectory = $script:verificationRoot
+    foreach ($argument in $gitArguments) {
+        if ([string]$argument -match '[\r\n\x00]' -or ([string]$argument).Length -gt 32768) {
+            throw 'Trusted Git argument rejected.'
         }
+        [void]$startInfo.ArgumentList.Add([string]$argument)
     }
-    $previousErrorActionPreference = $ErrorActionPreference
-    $previousConsoleOutputEncoding = [Console]::OutputEncoding
-    $previousOutputEncoding = $OutputEncoding
+    & $script:mppSetGitEnvironment -Environment $startInfo.Environment
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    [long]$characterCount = 0
+    $limitExceeded = $false
+    $exitCode = 1
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
     try {
-        foreach ($name in @($savedGitEnvironment.Keys)) {
-            [System.Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
-        }
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_NOSYSTEM', '1', 'Process')
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_SYSTEM', 'NUL', 'Process')
-        [System.Environment]::SetEnvironmentVariable('GIT_CONFIG_GLOBAL', 'NUL', 'Process')
-        $ErrorActionPreference = 'Continue'
-        [Console]::OutputEncoding = $utf8NoBom
-        $OutputEncoding = $utf8NoBom
-        $gitArguments = @(
-            "--git-dir=$([string]$Metadata.GitDirectory)",
-            "--work-tree=$([string]$Metadata.WorkTree)",
-            '-c', 'core.fsmonitor=false',
-            '-c', 'core.hooksPath=NUL',
-            '-c', 'core.quotePath=false'
-        ) + @($Arguments)
-        $lines = [System.Collections.Generic.List[string]]::new()
-        [long]$characterCount = 0
-        $limitExceeded = $false
-        try {
-            & $GitPath @gitArguments 2>$null | ForEach-Object {
-                $line = [string]$_
-                $nextCharacterCount = $characterCount + $line.Length
+        if ($process.Start()) {
+            $stderrTask = $process.StandardError.ReadToEndAsync()
+            while (($line = $process.StandardOutput.ReadLine()) -ne $null) {
+                $nextCharacterCount = $characterCount + ([string]$line).Length
                 if ($lines.Count -gt 0) { $nextCharacterCount++ }
                 if (($MaxLines -gt 0 -and ($lines.Count + 1) -gt $MaxLines) -or
                     ($MaxCharacters -gt 0 -and $nextCharacterCount -gt $MaxCharacters)) {
                     $limitExceeded = $true
-                    throw 'trusted-git-output-limit'
+                    try { $process.Kill() } catch { }
+                    break
                 }
-                $lines.Add($line) | Out-Null
+                $lines.Add([string]$line) | Out-Null
                 $characterCount = $nextCharacterCount
             }
-            $exitCode = $LASTEXITCODE
-        }
-        catch {
-            if (-not $limitExceeded) { throw }
-            $exitCode = 1
-        }
-        return [pscustomobject]@{
-            ExitCode = $exitCode
-            Lines = @($lines)
-            LimitExceeded = $limitExceeded
+            $process.WaitForExit()
+            $null = $stderrTask.GetAwaiter().GetResult()
+            if (-not $limitExceeded) { $exitCode = $process.ExitCode }
         }
     }
+    catch { $exitCode = 1 }
     finally {
-        [Console]::OutputEncoding = $previousConsoleOutputEncoding
-        $OutputEncoding = $previousOutputEncoding
-        $ErrorActionPreference = $previousErrorActionPreference
-        foreach ($name in @([System.Environment]::GetEnvironmentVariables('Process').Keys)) {
-            if ([string]$name -and [string]$name.StartsWith('GIT_', [System.StringComparison]::OrdinalIgnoreCase)) {
-                [System.Environment]::SetEnvironmentVariable([string]$name, $null, 'Process')
-            }
-        }
-        foreach ($name in @($savedGitEnvironment.Keys)) {
-            [System.Environment]::SetEnvironmentVariable(
-                [string]$name,
-                [string]$savedGitEnvironment[$name],
-                'Process'
-            )
-        }
+        $process.Dispose()
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Lines = @($lines)
+        LimitExceeded = $limitExceeded
     }
 }
 
@@ -1632,8 +1677,85 @@ function Test-CandidateBody {
     }
 }
 
+function Get-MasteryIntentCatalog {
+    if ($script:masteryIntentCatalogLoaded) {
+        return [pscustomobject]@{
+            Records = @($script:masteryIntentRecords)
+            Ids = $script:masteryIntentIds
+        }
+    }
+    $script:masteryIntentCatalogLoaded = $true
+    $script:masteryIntentRecords = @()
+    $script:masteryIntentIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $catalogPath = Join-Path $script:verificationRoot 'mastery/INTENTS.json'
+    if (-not (Test-Path -LiteralPath $catalogPath -PathType Leaf) -or
+        -not (Test-ExactPathCase $catalogPath) -or
+        $null -ne (Get-ReparsePointInPath $catalogPath)) {
+        Add-Issue 'mastery/INTENTS.json отсутствует или не прошел path integrity check.'
+        return [pscustomobject]@{ Records = @(); Ids = $script:masteryIntentIds }
+    }
+    $text = Read-BoundedUtf8Text -FilePath $catalogPath -Context 'mastery/INTENTS.json' -MaxBytes 262144
+    if ($null -eq $text) {
+        return [pscustomobject]@{ Records = @(); Ids = $script:masteryIntentIds }
+    }
+    try { $catalog = $text | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        Add-Issue 'mastery/INTENTS.json содержит некорректный JSON.'
+        return [pscustomobject]@{ Records = @(); Ids = $script:masteryIntentIds }
+    }
+    if ($null -eq $catalog -or $catalog -is [System.Array] -or
+        ((@($catalog.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'intents,schema_version') -or
+        [string]$catalog.schema_version -cne '1' -or
+        -not ($catalog.intents -is [System.Array]) -or
+        @($catalog.intents).Count -eq 0 -or
+        @($catalog.intents).Count -gt 128) {
+        Add-Issue 'mastery/INTENTS.json не соответствует catalog contract v1.'
+        return [pscustomobject]@{ Records = @(); Ids = $script:masteryIntentIds }
+    }
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($intent in @($catalog.intents)) {
+        if ($null -eq $intent -or $intent -is [System.Array] -or
+            ((@($intent.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'description,id,label') -or
+            $intent.id -isnot [string] -or $intent.label -isnot [string] -or $intent.description -isnot [string]) {
+            Add-Issue 'mastery/INTENTS.json содержит intent с неизвестной схемой.'
+            continue
+        }
+        $id = [string]$intent.id
+        $label = [string]$intent.label
+        $description = [string]$intent.description
+        if ($id -cnotmatch '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$' -or
+            -not $script:masteryIntentIds.Add($id)) {
+            Add-Issue 'mastery/INTENTS.json содержит invalid или duplicate intent id.'
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($label) -or $label.Length -gt 80 -or
+            [string]::IsNullOrWhiteSpace($description) -or $description.Length -gt 240 -or
+            ($label + $description) -match '[\r\n\x00-\x08\x0B\x0C\x0E-\x1F\x7F<>\[\]|]' -or
+            @(Get-SensitiveDataFindings ($label + "`n" + $description)).Count -gt 0) {
+            Add-Issue "mastery/INTENTS.json: intent '$id' содержит небезопасный label или description."
+            continue
+        }
+        $records.Add([pscustomobject]@{ Id = $id; Label = $label; Description = $description }) | Out-Null
+    }
+    $requiredIntentIds = @(
+        'research', 'product', 'business-architecture', 'planning', 'architecture', 'implementation',
+        'testing', 'debugging', 'review', 'security', 'release', 'operations', 'design', 'content',
+        'collaboration', 'knowledge-curation'
+    )
+    foreach ($requiredId in $requiredIntentIds) {
+        if (-not $script:masteryIntentIds.Contains($requiredId)) {
+            Add-Issue "mastery/INTENTS.json не содержит обязательный intent '$requiredId'."
+        }
+    }
+    $script:masteryIntentRecords = @($records | Sort-Object -Property Id)
+    return [pscustomobject]@{
+        Records = @($script:masteryIntentRecords)
+        Ids = $script:masteryIntentIds
+    }
+}
+
 function Test-Candidates {
-    $candidateRoot = Join-Path $script:verificationRoot 'knowledge\candidates'
+    $candidateRoot = [System.IO.Path]::Combine($script:verificationRoot, 'knowledge', 'candidates')
     if (-not (Test-Path -LiteralPath $candidateRoot -PathType Container)) { return }
 
     $rootReparse = Get-ReparsePointInPath $candidateRoot
@@ -1693,14 +1815,15 @@ function Test-Candidates {
             }
         }
         foreach ($field in @($data.Keys)) {
-            if ($field -cnotin $candidateFields) {
+            if ($field -cnotin $candidateAllowedFields) {
                 Add-Issue "$relative`: candidate содержит неизвестное поле."
             }
         }
         $scalarTypesValid = $true
-        foreach ($field in $candidateScalarFields) {
+        foreach ($field in @($candidateScalarFields + $candidateOptionalMethodScalarFields)) {
             if (-not $data.ContainsKey($field)) { continue }
             $allowNull = $field -cin $candidateNullableScalarFields
+            if ($field -cin $candidateOptionalMethodScalarFields) { $allowNull = $true }
             if (-not (& $script:mpkTestFrontMatterScalarValue -Value $data[$field] -AllowNull:$allowNull)) {
                 $expectedKind = if ($allowNull) { 'YAML scalar или null' } else { 'YAML scalar' }
                 Add-Issue "$relative`: поле '$field' должно быть $expectedKind."
@@ -1816,13 +1939,13 @@ function Test-Candidates {
         if ([string]$data.owner_scope -cne 'project') {
             Add-Issue "$relative`: owner_scope должен быть project."
         }
-        if ([string]$data.domain -cnotin @('idea', 'business', 'architecture', 'operations', 'research', 'mastery', 'instructions')) {
+        if ([string]$data.domain -cnotin @('idea', 'product', 'business', 'architecture', 'codebase', 'operations', 'research', 'mastery', 'instructions')) {
             Add-Issue "$relative`: invalid domain."
         }
         if ([string]$data.confidence -cnotin @('high', 'medium', 'low', 'unknown')) {
             Add-Issue "$relative`: invalid confidence."
         }
-        if ([string]$data.capture_basis -cnotin @('repo-derived', 'explicit-user-capture', 'research-derived')) {
+        if ([string]$data.capture_basis -cnotin @('repo-derived', 'explicit-user-capture', 'research-derived', 'plan-closeout')) {
             Add-Issue "$relative`: invalid capture_basis."
         }
         if ([string]$data.data_class -cnotin @('public', 'internal')) {
@@ -1858,6 +1981,9 @@ function Test-Candidates {
         }
         if ($sources.Count -eq 0) {
             Add-Issue "$relative`: source_refs не может быть пустым."
+        }
+        if ([string]$data.capture_basis -ceq 'plan-closeout' -and @($sources | Where-Object { [string]$_ -match '^plans/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md(?:#.+)?$' }).Count -eq 0) {
+            Add-Issue "$relative`: plan-closeout candidate требует source_ref на Plan v2."
         }
         if (@($sources | Sort-Object -Unique).Count -ne $sources.Count) {
             Add-Issue "$relative`: source_refs содержит дубли."
@@ -1939,14 +2065,48 @@ function Test-Candidates {
             if ([System.IO.Path]::GetExtension($target.FullPath) -cne '.md') {
                 Add-Issue "$relative`: target_ref должен указывать на канонический Markdown-файл."
             }
-            if ($targetRelative -match '^(?:knowledge/candidates|research/runs|analysis/runs|inbox/raw|business/raw|plans|retrospectives)(?:/|$)') {
+            if ($targetRelative -match '^(?:knowledge/candidates|research/runs|analysis/runs|inbox/raw|plans|retrospectives)(?:/|$)') {
                 Add-Issue "$relative`: target_ref указывает в рабочую или RAW-зону, а не в канон: $targetRelative."
             }
         }
 
         if ([string]$data.type -ceq 'method') {
+            foreach ($field in $candidateOptionalMethodFields) {
+                if (-not $data.ContainsKey($field)) {
+                    Add-Issue "$relative`: method candidate требует поле '$field'."
+                }
+            }
             if ([string]$data.domain -cne 'mastery') {
                 Add-Issue "$relative`: method candidate требует domain: mastery."
+            }
+            if (-not $data.ContainsKey('method_kind') -or [string]$data.method_kind -cnotin @('heuristic', 'checklist', 'workflow', 'standard')) {
+                Add-Issue "$relative`: method candidate требует valid method_kind."
+            }
+            if (-not $data.ContainsKey('method_summary') -or
+                -not (& $script:mpkTestFrontMatterScalarValue -Value $data.method_summary) -or
+                [string]::IsNullOrWhiteSpace([string]$data.method_summary) -or
+                ([string]$data.method_summary).Length -gt 160 -or
+                [string]$data.method_summary -match '[\r\n\x00-\x08\x0B\x0C\x0E-\x1F\x7F<>\[\]|]') {
+                Add-Issue "$relative`: method candidate требует безопасный method_summary."
+            }
+            $methodTitleMatch = [regex]::Match([string]$record.Document.Body, '(?m)^#[ \t]+(?<title>[^\r\n]+?)[ \t]*$')
+            if (-not $methodTitleMatch.Success -or
+                $methodTitleMatch.Groups['title'].Value.Trim() -cnotmatch '^[\p{L}\p{N}][\p{L}\p{N} .,:;!?()/_+\-]{0,119}$') {
+                Add-Issue "$relative`: method candidate требует безопасный H1 title."
+            }
+            $methodIntents = if ($data.ContainsKey('method_applies_to') -and $data.method_applies_to -is [System.Array]) {
+                @($data.method_applies_to | ForEach-Object { [string]$_ })
+            }
+            else { @() }
+            if ($methodIntents.Count -eq 0 -or
+                @($methodIntents | Sort-Object -Unique -CaseSensitive).Count -ne $methodIntents.Count) {
+                Add-Issue "$relative`: method candidate требует непустой method_applies_to без дублей."
+            }
+            $intentCatalog = Get-MasteryIntentCatalog
+            foreach ($intentId in $methodIntents) {
+                if (-not $intentCatalog.Ids.Contains($intentId)) {
+                    Add-Issue "$relative`: method_applies_to содержит intent вне mastery/INTENTS.json."
+                }
             }
             if ([string]$data.target_ref -cne 'mastery/local/INDEX.md#зарегистрированные-расширения') {
                 Add-Issue "$relative`: method candidate требует exact target_ref локального mastery registry."
@@ -1970,11 +2130,11 @@ function Test-Candidates {
                         $normalizedSource -notmatch '(?:^|/)(?:README|INDEX|TEMPLATE)\.md$') {
                         $hasProjectSource = $true
                     }
-                    if ($normalizedSource -match '^analysis/runs/(?<run>[^/]+)/decision\.md$') {
-                        [void]$taskSourceIdentities.Add('analysis:' + [string]$Matches['run'])
-                    }
-                    elseif ($normalizedSource -match '^research/runs/(?<run>[^/]+)/decision\.md$') {
+                    if ($normalizedSource -match '^research/runs/(?<run>[^/]+)/decision\.md$') {
                         [void]$taskSourceIdentities.Add('research:' + [string]$Matches['run'])
+                    }
+                    elseif ($normalizedSource -match '^plans/(?<task>\d{4}-\d{2}-\d{2}-[^/]+)\.md$') {
+                        [void]$taskSourceIdentities.Add('plan:' + [string]$Matches['task'])
                     }
                     elseif ($normalizedSource -match '^retrospectives/(?<task>[^/]+)\.md$') {
                         [void]$taskSourceIdentities.Add('retrospective:' + [string]$Matches['task'])
@@ -1988,6 +2148,18 @@ function Test-Candidates {
             )
             if ($taskSourceIdentities.Count -lt 2 -and -not $explicitOperatorCorrection) {
                 Add-Issue "$relative`: method candidate требует два независимых task/run source или explicit operator correction с user authority и project source."
+            }
+        }
+        else {
+            if ($data.ContainsKey('method_kind') -and -not (Test-IsNullValue $data.method_kind)) {
+                Add-Issue "$relative`: non-method candidate требует method_kind: null."
+            }
+            if ($data.ContainsKey('method_summary') -and -not (Test-IsNullValue $data.method_summary)) {
+                Add-Issue "$relative`: non-method candidate требует method_summary: null."
+            }
+            if ($data.ContainsKey('method_applies_to') -and
+                (-not ($data.method_applies_to -is [System.Array]) -or @($data.method_applies_to).Count -ne 0)) {
+                Add-Issue "$relative`: non-method candidate требует method_applies_to: []."
             }
         }
 
@@ -2117,7 +2289,7 @@ function Get-MarkdownLinkTargets {
         $pathPart = $destination.Split('#', 2)[0]
         try {
             $decoded = [System.Uri]::UnescapeDataString($pathPart)
-            $resolved = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $MarkdownPath) $decoded.Replace('/', '\')))
+            $resolved = [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $MarkdownPath) $decoded))
             if ((Test-PathWithinRoot $resolved) -and (Test-ExactPathCase $resolved)) {
                 $targets.Add($resolved) | Out-Null
             }
@@ -2174,7 +2346,7 @@ function Test-RootReachability {
         foreach ($path in @($manifest.portable_files)) {
             $relative = [string]$path
             if (-not $relative.EndsWith('.md', [System.StringComparison]::Ordinal)) { continue }
-            $absolute = Join-Path $script:verificationRoot $relative.Replace('/', '\')
+            $absolute = Join-Path $script:verificationRoot $relative
             if (Test-Path -LiteralPath $absolute -PathType Leaf) {
                 $portableCanonical[(Resolve-Path -LiteralPath $absolute).Path] = $relative
             }
@@ -2186,7 +2358,7 @@ function Test-RootReachability {
                 if ($relative -match '^(?:plans|retrospectives|research/runs|analysis/runs|knowledge/candidates|inbox/raw|business/raw)(?:/|$)') {
                     continue
                 }
-                $absolute = Join-Path $script:verificationRoot $relative.Replace('/', '\')
+                $absolute = Join-Path $script:verificationRoot $relative
                 if (Test-Path -LiteralPath $absolute -PathType Leaf) {
                     $maintenanceCanonical[(Resolve-Path -LiteralPath $absolute).Path] = $relative
                 }
@@ -2215,7 +2387,7 @@ function Test-RootReachability {
 
     if ($isGenerated) {
         foreach ($zone in @('idea', 'business', 'docs', 'mastery/local')) {
-            $zonePath = Join-Path $script:verificationRoot $zone.Replace('/', '\')
+            $zonePath = Join-Path $script:verificationRoot $zone
             if (-not (Test-Path -LiteralPath $zonePath -PathType Container)) { continue }
             foreach ($file in (Get-ChildItem -LiteralPath $zonePath -Recurse -File -Filter '*.md' -Force)) {
                 $relative = Get-RelativePath $file.FullName
@@ -2285,7 +2457,7 @@ function Test-RootReachability {
 function Test-RawRecords {
     $rawIds = @{}
     foreach ($relativeRoot in @('inbox/raw', 'business/raw')) {
-        $rawRoot = Join-Path $script:verificationRoot $relativeRoot.Replace('/', '\')
+        $rawRoot = Join-Path $script:verificationRoot $relativeRoot
         if (-not (Test-Path -LiteralPath $rawRoot -PathType Container)) { continue }
         $rootReparse = Get-ReparsePointInPath $rawRoot
         if ($null -ne $rootReparse) {
@@ -2739,7 +2911,7 @@ function Test-TrustedHistoryContracts {
         foreach ($headRawPath in (Get-TrustedGitHeadPaths -Prefix $rawPrefix)) {
             if ($headRawPath -cnotmatch '^(?:inbox/raw|business/raw)/.+\.md$' -or
                 $headRawPath -match '/(?:README|TEMPLATE)\.md$') { continue }
-            $currentRawPath = Join-Path $script:verificationRoot $headRawPath.Replace('/', '\')
+            $currentRawPath = Join-Path $script:verificationRoot $headRawPath
             if (-not (Test-Path -LiteralPath $currentRawPath -PathType Leaf)) {
                 Add-Issue "$headRawPath`: tracked RAW deletion требует отдельного authorized delete workflow."
                 continue
@@ -2809,7 +2981,7 @@ function Test-Mastery {
     foreach ($entry in $files) {
         $path = [string]$entry.path
         $expectedHash = ([string]$entry.sha256).ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($path) -or $path -notmatch '^mastery/(?:researcher|analyst)/[A-Za-z0-9._/-]+\.md$') {
+        if ([string]::IsNullOrWhiteSpace($path) -or $path -notmatch '^mastery/researcher/[A-Za-z0-9._/-]+\.md$') {
             Add-Issue ".template-manifest.json: unsafe mastery baseline path '$path'."
             continue
         }
@@ -2832,7 +3004,7 @@ function Test-Mastery {
             }
         }
     }
-    foreach ($baselineRootRelative in @('mastery\researcher', 'mastery\analyst')) {
+    foreach ($baselineRootRelative in @('mastery\researcher')) {
         $baselineRoot = Join-Path $script:verificationRoot $baselineRootRelative
         if (Test-Path -LiteralPath $baselineRoot -PathType Container) {
             foreach ($file in (Get-ChildItem -LiteralPath $baselineRoot -File -Filter '*.md' -Force)) {
@@ -2889,7 +3061,7 @@ function Test-Mastery {
         }
     }
 
-    $localRoot = Join-Path $script:verificationRoot 'mastery\local'
+    $localRoot = [System.IO.Path]::Combine($script:verificationRoot, 'mastery', 'local')
     if (-not (Test-Path -LiteralPath $localRoot -PathType Container)) { return }
     $localReparse = Get-ReparsePointInPath $localRoot
     if ($null -ne $localReparse) {
@@ -2897,7 +3069,7 @@ function Test-Mastery {
         return
     }
     $indexPath = Join-Path $localRoot 'INDEX.md'
-    $registered = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $registered = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
     if (Test-Path -LiteralPath $indexPath -PathType Leaf) {
         foreach ($target in (Get-MarkdownLinkTargets $indexPath)) {
             $registered.Add([System.IO.Path]::GetFullPath($target)) | Out-Null
@@ -2905,19 +3077,15 @@ function Test-Mastery {
     }
     else { Add-Issue 'mastery/local/INDEX.md отсутствует.' }
 
-    $allowedFields = @('method_id', 'owner_scope', 'applies_to', 'status', 'source_refs', 'verified_at', 'review_due', 'supersedes')
-    $allowedIntents = @(
-        'niche-discovery', 'idea-comparison', 'deep-dive', 'project-assessment', 'refresh', 'external-research-audit',
-        'stakeholder-analysis', 'requirements-elicitation', 'business-process-analysis', 'as-is-to-be',
-        'gap-analysis', 'business-rule-analysis', 'use-case-modeling', 'functional-requirements',
-        'nonfunctional-requirements', 'data-analysis', 'integration-analysis', 'api-contract-analysis',
-        'traceability', 'change-impact-analysis', 'acceptance-criteria', 'specification-authoring',
-        'specification-review', 'requirements-validation'
+    $intentCatalog = Get-MasteryIntentCatalog
+    $allowedFields = @(
+        'mastery_contract_version', 'method_id', 'method_kind', 'summary', 'owner_scope',
+        'applies_to', 'status', 'source_refs', 'verified_at', 'review_due', 'supersedes'
     )
     $records = [System.Collections.Generic.List[object]]::new()
     $methodIds = @{}
     foreach ($file in (Get-ChildItem -LiteralPath $localRoot -Recurse -File -Filter '*.md' -Force)) {
-        if ($file.FullName.Equals($indexPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($file.FullName.Equals($indexPath, $script:pathComparison)) {
             $indexText = Read-BoundedUtf8Text -FilePath $file.FullName -Context 'mastery/local index safety'
             if ($null -ne $indexText) {
                 foreach ($finding in (Get-SensitiveDataFindings $indexText)) {
@@ -2954,7 +3122,7 @@ function Test-Mastery {
         foreach ($field in @($data.Keys)) {
             if ($field -cnotin $allowedFields) { Add-Issue "$relative`: local mastery closed-schema отвергает поле '$field'." }
         }
-        foreach ($field in @('method_id', 'owner_scope', 'status', 'verified_at', 'review_due', 'supersedes')) {
+        foreach ($field in @('mastery_contract_version', 'method_id', 'method_kind', 'summary', 'owner_scope', 'status', 'verified_at', 'review_due', 'supersedes')) {
             if ($data.ContainsKey($field)) {
                 $allowNull = $field -ceq 'supersedes'
                 if (-not (& $script:mpkTestFrontMatterScalarValue -Value $data[$field] -AllowNull:$allowNull)) {
@@ -2964,6 +3132,9 @@ function Test-Mastery {
         }
 
         $methodId = [string]$data.method_id
+        if ([string]$data.mastery_contract_version -cne '2') {
+            Add-Issue "$relative`: local mastery требует mastery_contract_version: 2."
+        }
         if ($methodId -cnotmatch '^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$') {
             Add-Issue "$relative`: invalid method_id."
         }
@@ -2971,6 +3142,19 @@ function Test-Mastery {
             Add-Issue "Duplicate local method_id: $($methodIds[$methodId]) и $relative."
         }
         else { $methodIds[$methodId] = $relative }
+        if ([System.IO.Path]::GetFileNameWithoutExtension($file.Name) -cne $methodId -or
+            $file.DirectoryName -cne $localRoot) {
+            Add-Issue "$relative`: filename должен совпадать с method_id в плоском mastery/local."
+        }
+        $methodKind = [string]$data.method_kind
+        if ($methodKind -cnotin @('heuristic', 'checklist', 'workflow', 'standard')) {
+            Add-Issue "$relative`: invalid method_kind."
+        }
+        $methodSummary = [string]$data.summary
+        if ([string]::IsNullOrWhiteSpace($methodSummary) -or $methodSummary.Length -gt 160 -or
+            $methodSummary -match '[\r\n\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') {
+            Add-Issue "$relative`: local mastery требует безопасный summary."
+        }
         if ([string]$data.owner_scope -cne 'project') { Add-Issue "$relative`: local mastery требует owner_scope: project." }
         $status = [string]$data.status
         if ($status -cnotin @('active', 'deprecated', 'superseded')) { Add-Issue "$relative`: invalid local mastery status." }
@@ -2983,18 +3167,49 @@ function Test-Mastery {
             Add-Issue "$relative`: applies_to содержит дубли."
         }
         foreach ($intent in $appliesTo) {
-            if ($intent -cnotin $allowedIntents) { Add-Issue "$relative`: unknown applies_to '$intent'." }
+            if (-not $intentCatalog.Ids.Contains($intent)) { Add-Issue "$relative`: unknown applies_to '$intent'." }
         }
 
         $sources = if ($data.source_refs -is [System.Array]) { @($data.source_refs | ForEach-Object { [string]$_ }) } else { @() }
-        if (-not ($data.source_refs -is [System.Array]) -or $sources.Count -eq 0) {
-            Add-Issue "$relative`: local mastery требует непустой source_refs list."
+        if (-not ($data.source_refs -is [System.Array]) -or $sources.Count -ne 1) {
+            Add-Issue "$relative`: local mastery требует ровно один candidate в source_refs."
         }
         elseif (@($sources | Sort-Object -Unique -CaseSensitive).Count -ne $sources.Count) {
             Add-Issue "$relative`: source_refs содержит дубли."
         }
         foreach ($source in $sources) {
-            Resolve-SafeReference -Value $source -Context "$relative source_refs" -AllowExternal -AllowLogical -MustExist | Out-Null
+            $resolvedMethodCandidate = Resolve-SafeReference -Value $source -Context "$relative source_refs" -MustExist
+            if ($source -cnotmatch '^knowledge/candidates/\d{4}/(?<candidate>KC-\d{8}-\d{6}-[0-9a-f]{8})\.md$') {
+                Add-Issue "$relative`: source_refs должен вести на exact method candidate path."
+                continue
+            }
+            $methodCandidateId = [string]$Matches['candidate']
+            if (-not $script:candidateMetadataMap.ContainsKey($methodCandidateId)) {
+                Add-Issue "$relative`: source_refs ссылается на неизвестный candidate."
+                continue
+            }
+            if ($null -ne $resolvedMethodCandidate -and $resolvedMethodCandidate.Kind -eq 'internal') {
+                $candidateDocument = Read-FrontMatterDocument $resolvedMethodCandidate.FullPath
+                if ($null -ne $candidateDocument) {
+                    $candidateData = $candidateDocument.Data
+                    if ([string]$candidateData.state -cne 'applied' -or
+                        [string]$candidateData.type -cne 'method' -or
+                        [string]$candidateData.domain -cne 'mastery' -or
+                        [string]$candidateData.claim_key -cne "method.$methodId" -or
+                        [string]$candidateData.method_kind -cne $methodKind -or
+                        [string]$candidateData.method_summary -cne $methodSummary) {
+                        Add-Issue "$relative`: Local Mastery metadata не совпадает с applied method candidate."
+                    }
+                    $candidateIntents = if ($candidateData.method_applies_to -is [System.Array]) {
+                        @($candidateData.method_applies_to | ForEach-Object { [string]$_ })
+                    }
+                    else { @() }
+                    if ($candidateIntents.Count -ne $appliesTo.Count -or
+                        @(Compare-Object -ReferenceObject $candidateIntents -DifferenceObject $appliesTo -CaseSensitive).Count -gt 0) {
+                        Add-Issue "$relative`: applies_to не совпадает с applied method candidate."
+                    }
+                }
+            }
         }
 
         $verified = $null
@@ -3023,6 +3238,8 @@ function Test-Mastery {
             Relative = $relative
             FullPath = $file.FullName
             Status = $status
+            MethodKind = $methodKind
+            Summary = $methodSummary
             AppliesTo = $appliesTo
             ReviewDue = $due
             Registered = $isRegistered
@@ -3156,7 +3373,7 @@ function Test-ResearchBaselineReference {
 }
 
 function Test-ResearchMethodReferences {
-    $runsRoot = Join-Path $script:verificationRoot 'research\runs'
+    $runsRoot = [System.IO.Path]::Combine($script:verificationRoot, 'research', 'runs')
     if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) { return }
     foreach ($run in (Get-ChildItem -LiteralPath $runsRoot -Directory -Force)) {
         if (($run.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
@@ -3313,7 +3530,14 @@ function Convert-ToOriginIdentityValue {
 }
 
 function Test-ResearchRunInventoryAndSafety {
-    $assetsRoot = Join-Path $script:verificationRoot '.agents\skills\startup-researcher\assets\run-template'
+    $assetsRoot = [System.IO.Path]::Combine(
+        $script:verificationRoot,
+        '.agents',
+        'skills',
+        'startup-researcher',
+        'assets',
+        'run-template'
+    )
     if (-not (Test-Path -LiteralPath $assetsRoot -PathType Container)) {
         Add-Issue 'research-run-contract: startup-researcher run-template assets отсутствуют.'
         return
@@ -3332,7 +3556,7 @@ function Test-ResearchRunInventoryAndSafety {
         return
     }
 
-    $runsRoot = Join-Path $script:verificationRoot 'research\runs'
+    $runsRoot = [System.IO.Path]::Combine($script:verificationRoot, 'research', 'runs')
     if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) { return }
     if ($null -ne (Get-ReparsePointInPath $runsRoot)) {
         Add-Issue 'research/runs проходит через reparse point.'
@@ -3393,7 +3617,7 @@ function Test-ResearchEvidence {
     $script:evidenceIdMap = @{}
     $script:evidenceDecisionRefMap = @{}
     $script:researchRunEvidenceIds = @{}
-    $evidenceRoot = Join-Path $script:verificationRoot 'research\runs'
+    $evidenceRoot = [System.IO.Path]::Combine($script:verificationRoot, 'research', 'runs')
     if (-not (Test-Path -LiteralPath $evidenceRoot -PathType Container)) { return }
     $rootReparse = Get-ReparsePointInPath $evidenceRoot
     if ($null -ne $rootReparse) {
@@ -3717,7 +3941,7 @@ function Initialize-ResearchCandidateAssociations {
                 Add-Issue "$($metadata.Relative): source из analysis run требует exact source_ref на decision.md того же run."
                 continue
             }
-            $analysisDecisionPath = Join-Path $script:verificationRoot $analysisDecisionRef.Replace('/', '\')
+            $analysisDecisionPath = Join-Path $script:verificationRoot $analysisDecisionRef
             $analysisDecision = Read-FrontMatterDocument $analysisDecisionPath
             if ($null -eq $analysisDecision) { continue }
             $analysisData = $analysisDecision.Data
@@ -4031,7 +4255,7 @@ function Test-ResearchDecisionKnowledgeOutcome {
 
 function Test-ResearchDecisions {
     Initialize-ResearchCandidateAssociations
-    $evidenceRoot = Join-Path $script:verificationRoot 'research\runs'
+    $evidenceRoot = [System.IO.Path]::Combine($script:verificationRoot, 'research', 'runs')
     if (-not (Test-Path -LiteralPath $evidenceRoot -PathType Container)) { return }
     $runIds = $script:researchRunEvidenceIds
     $decisionCount = 0
@@ -4121,6 +4345,23 @@ function Test-ResearchDecisions {
 }
 
 function Test-LifecycleArtifacts {
+    $legacySourceOnly = @{}
+    $manifestPath = Join-Path $script:verificationRoot '.template-manifest.json'
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        $manifestText = Read-BoundedUtf8Text -FilePath $manifestPath -Context 'Lifecycle manifest'
+        if ($null -ne $manifestText) {
+            try {
+                $manifest = $manifestText | ConvertFrom-Json -ErrorAction Stop
+                foreach ($path in @($manifest.source_only_paths)) { $legacySourceOnly[[string]$path] = $true }
+            }
+            catch { Add-Issue 'Lifecycle manifest не прошел JSON parsing.' }
+        }
+    }
+    $retiredLegacyAffectedCanon = @(
+        'analysis/CONTRACT.md',
+        'mastery/analyst/INDEX.md',
+        'scripts/verify-analysis.ps1'
+    )
     $configs = @(
         [pscustomobject]@{
             Root = 'docs/decisions'; Kind = 'decision'
@@ -4141,10 +4382,10 @@ function Test-LifecycleArtifacts {
     $decisionSupersedes = @{}
 
     foreach ($config in $configs) {
-        $artifactRoot = Join-Path $script:verificationRoot $config.Root.Replace('/', '\')
+        $artifactRoot = Join-Path $script:verificationRoot $config.Root
         if (-not (Test-Path -LiteralPath $artifactRoot -PathType Container)) { continue }
         foreach ($file in (Get-ChildItem -LiteralPath $artifactRoot -Recurse -File -Filter '*.md' -Force)) {
-            if ($file.Name -cin @('README.md', 'TEMPLATE.md')) { continue }
+            if ($file.Name -cin @('README.md', 'TEMPLATE.md', 'INDEX.md')) { continue }
             $relative = Get-RelativePath $file.FullName
             if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
                 Add-Issue "$relative`: lifecycle artifact является reparse point."
@@ -4153,13 +4394,22 @@ function Test-LifecycleArtifacts {
             $document = Read-FrontMatterDocument $file.FullName
             if ($null -eq $document) { continue }
             $data = $document.Data
-            foreach ($field in $config.Fields) {
+            $isPlanV2 = $config.Kind -ceq 'plan' -and $data.ContainsKey('plan_contract_version') -and [string]$data.plan_contract_version -ceq '2'
+            $expectedFields = if ($isPlanV2) {
+                @(
+                    'artifact_kind', 'plan_contract_version', 'plan_id', 'task_key', 'prompt_ref',
+                    'status', 'current_phase', 'updated_at', 'completed_at', 'closeout_status',
+                    'knowledge_outcome', 'candidate_ids', 'result_refs', 'affected_canon', 'blocked_reason'
+                )
+            }
+            else { $config.Fields }
+            foreach ($field in $expectedFields) {
                 if (-not $data.ContainsKey($field)) {
                     Add-Issue "$relative`: lifecycle artifact требует поле '$field'."
                 }
             }
             foreach ($field in @($data.Keys)) {
-                if ($field -cnotin $config.Fields) {
+                if ($field -cnotin $expectedFields) {
                     Add-Issue "$relative`: lifecycle closed-schema отвергает поле '$field'."
                 }
             }
@@ -4215,6 +4465,13 @@ function Test-LifecycleArtifacts {
             }
             else { @() }
             foreach ($affectedRef in $affectedCanon) {
+                $isLegacyRetiredReference = (
+                    -not $isPlanV2 -and
+                    $legacySourceOnly.ContainsKey($relative) -and
+                    $relative -cmatch '^(?:docs/decisions|plans|retrospectives)/2026-[^/]+\.md$' -and
+                    $retiredLegacyAffectedCanon -ccontains $affectedRef
+                )
+                if ($isLegacyRetiredReference) { continue }
                 $resolvedAffected = Resolve-SafeReference -Value $affectedRef -Context "$relative affected_canon" -MustExist
                 if ($affectedRef.Contains('#')) {
                     Add-Issue "$relative`: affected_canon принимает только file paths без anchor."
@@ -4229,7 +4486,7 @@ function Test-LifecycleArtifacts {
 
             $requiresFinalOutcome = (
                 $config.Kind -ceq 'retrospective' -or
-                ($config.Kind -ceq 'plan' -and $status -cin @('complete', 'blocked')) -or
+                ($config.Kind -ceq 'plan' -and (($isPlanV2 -and $status -ceq 'complete') -or (-not $isPlanV2 -and $status -cin @('complete', 'blocked')))) -or
                 ($config.Kind -ceq 'decision' -and $status -cne 'proposed')
             )
             if ($null -eq $outcome) {
@@ -4256,17 +4513,23 @@ function Test-LifecycleArtifacts {
                         Add-Issue "$relative`: applied knowledge_outcome требует currently applied candidate."
                     }
                 }
-                if ($outcomeKind -ceq 'blocked') {
+                if (-not $isPlanV2 -and $outcomeKind -ceq 'blocked') {
                     if (-not $data.ContainsKey('blocked_reason') -or (Test-IsNullValue $data.blocked_reason)) {
                         Add-Issue "$relative`: blocked knowledge_outcome требует blocked_reason."
                     }
                 }
-                elseif ($data.ContainsKey('blocked_reason') -and -not (Test-IsNullValue $data.blocked_reason)) {
+                elseif (-not $isPlanV2 -and $data.ContainsKey('blocked_reason') -and -not (Test-IsNullValue $data.blocked_reason)) {
                     Add-Issue "$relative`: blocked_reason допустим только для blocked outcome."
                 }
             }
-            if ($config.Kind -ceq 'plan' -and $status -ceq 'blocked' -and $outcome -cne 'blocked') {
+            if ($config.Kind -ceq 'plan' -and -not $isPlanV2 -and $status -ceq 'blocked' -and $outcome -cne 'blocked') {
                 Add-Issue "$relative`: blocked plan требует knowledge_outcome: blocked."
+            }
+            if ($isPlanV2 -and $status -ceq 'blocked' -and (Test-IsNullValue $data.blocked_reason)) {
+                Add-Issue "$relative`: blocked Plan v2 требует blocked_reason."
+            }
+            if ($isPlanV2 -and $status -cne 'blocked' -and -not (Test-IsNullValue $data.blocked_reason)) {
+                Add-Issue "$relative`: blocked_reason Plan v2 допустим только для status blocked."
             }
 
             if ($config.Kind -ceq 'decision') {
@@ -4302,7 +4565,7 @@ function Test-LifecycleArtifacts {
     }
 
     $reportedDecisionCycles = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
+        $script:pathComparer
     )
     function Visit-DecisionSupersedes {
         param(
@@ -4326,7 +4589,7 @@ function Test-LifecycleArtifacts {
         $Visited.Add($Node) | Out-Null
     }
     $visitedDecisions = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
+        $script:pathComparer
     )
     foreach ($start in @($decisionSupersedes.Keys)) {
         Visit-DecisionSupersedes -Node ([string]$start) -Active @{} -Visited $visitedDecisions
@@ -4340,6 +4603,13 @@ function Invoke-KnowledgeVerification {
         throw "Корень проверки не найден: $VerificationRoot"
     }
     $script:verificationRoot = (Resolve-Path -LiteralPath $VerificationRoot).Path.TrimEnd([char[]]'\/')
+    $script:pathComparison = & $script:mppGetPathComparison -Path $script:verificationRoot
+    $script:pathComparer = if ($script:pathComparison -eq [System.StringComparison]::OrdinalIgnoreCase) {
+        [System.StringComparer]::OrdinalIgnoreCase
+    }
+    else {
+        [System.StringComparer]::Ordinal
+    }
     $script:currentIssues = [System.Collections.Generic.List[string]]::new()
     $script:currentReport = @{
         pending = [System.Collections.Generic.List[string]]::new()
@@ -4356,7 +4626,10 @@ function Invoke-KnowledgeVerification {
     $script:candidateMetadataMap = @{}
     $script:researchDecisionCandidateIds = @{}
     $script:localMethodMap = @{}
-    $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $script:masteryIntentCatalogLoaded = $false
+    $script:masteryIntentRecords = @()
+    $script:masteryIntentIds = $null
+    $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
     $script:textReadCorpusBytes = [long]0
 
     $rootReparse = Get-ReparsePointInFullChain $script:verificationRoot
@@ -4425,12 +4698,31 @@ function Write-FixtureFile {
         [Parameter(Mandatory = $true)][string]$Relative,
         [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Content
     )
-    $path = Join-Path $Base $Relative.Replace('/', '\')
+    $path = Join-Path $Base $Relative
     $parent = Split-Path -Parent $path
     if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
     [System.IO.File]::WriteAllText($path, $Content, $utf8NoBom)
+}
+
+function New-FixtureDirectoryLink {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+
+    $itemType = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows
+    )) { 'Junction' } else { 'SymbolicLink' }
+    $link = New-Item -ItemType $itemType -Path $Path -Target $Target -ErrorAction Stop
+    $isReparse = ($link.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    $isLink = $link.PSObject.Properties.Name -contains 'LinkType' -and
+        [string]$link.LinkType -cin @('SymbolicLink', 'Junction')
+    if (-not ($isReparse -or $isLink)) {
+        throw 'SELFTEST FAIL: directory link fixture не создан.'
+    }
+    return $link
 }
 
 function Get-FixtureCandidate {
@@ -4447,11 +4739,20 @@ function Get-FixtureCandidate {
         [string]$ClaimKey = 'fixture-claim',
         [string]$TargetRef = 'docs/target.md#knowledge',
         [string]$Confidence = 'high',
-        [string]$ReviewDue = "'2099-12-31'"
+        [string]$ReviewDue = "'2099-12-31'",
+        [string]$MethodKind = 'checklist',
+        [string]$MethodSummary = 'Повторяемый fixture-метод для проверки контракта.',
+        [string[]]$MethodAppliesTo = @('planning')
     )
     $sourceYaml = @($SourceRef) + @($AdditionalSourceRefs) |
         ForEach-Object { "  - '$_'" }
     $sourceYaml = $sourceYaml -join "`n"
+    $methodKindYaml = if ($Type -ceq 'method') { $MethodKind } else { 'null' }
+    $methodSummaryYaml = if ($Type -ceq 'method') { "'$($MethodSummary.Replace("'", "''"))'" } else { 'null' }
+    $methodAppliesYaml = if ($Type -ceq 'method') {
+        "`n" + (($MethodAppliesTo | ForEach-Object { "  - '$_'" }) -join "`n")
+    }
+    else { '[]' }
     return @"
 ---
 id: '$Id'
@@ -4459,6 +4760,9 @@ state: $State
 type: $Type
 owner_scope: project
 domain: $Domain
+method_kind: $methodKindYaml
+method_summary: $methodSummaryYaml
+method_applies_to: $methodAppliesYaml
 claim_key: $ClaimKey
 target_ref: '$TargetRef'
 source_refs:
@@ -4634,33 +4938,43 @@ function Assert-GeneratorRejectedWithoutArtifact {
         [string]$CaptureBasis = 'repo-derived',
         [string]$ReviewDue = '2099-12-31',
         [string]$WriteIntent = 'explicit-promotion',
-        [string]$AuthorityRef = 'user-request:selftest-generator'
+        [string]$AuthorityRef = 'user-request:selftest-generator',
+        [string]$MethodKind = 'checklist',
+        [string]$MethodSummary = 'Повторяемый fixture-метод для проверки generator.',
+        [string[]]$MethodAppliesTo = @('planning')
     )
 
-    $candidateDirectory = Join-Path $FixtureRoot 'knowledge\candidates'
+    $candidateDirectory = [System.IO.Path]::Combine($FixtureRoot, 'knowledge', 'candidates')
     $beforeCandidates = @(Get-ChildItem -LiteralPath $candidateDirectory -Recurse -File -Filter 'KC-*.md' -Force).Count
     $beforeDirectories = @(Get-ChildItem -LiteralPath $candidateDirectory -Recurse -Directory -Force).Count
     $rejected = $false
     $message = ''
     try {
-        & (Join-Path $PSScriptRoot 'new-knowledge-candidate.ps1') `
-            -Root $FixtureRoot `
-            -Type $Type `
-            -Domain $Domain `
-            -ClaimKey $ClaimKey `
-            -TargetRef $TargetRef `
-            -SourceRefs $SourceRefs `
-            -ConflictRefs $ConflictRefs `
-            -Confidence $Confidence `
-            -CaptureBasis $CaptureBasis `
-            -DataClass internal `
-            -Title $Title `
-            -Basis $Basis `
-            -ProposedChange $ProposedChange `
-            -DuplicateCheck $DuplicateCheck `
-            -ReviewDue $ReviewDue `
-            -WriteIntent $WriteIntent `
-            -AuthorityRef $AuthorityRef | Out-Null
+        $generatorArguments = @{
+            Root = $FixtureRoot
+            Type = $Type
+            Domain = $Domain
+            ClaimKey = $ClaimKey
+            TargetRef = $TargetRef
+            SourceRefs = $SourceRefs
+            ConflictRefs = $ConflictRefs
+            Confidence = $Confidence
+            CaptureBasis = $CaptureBasis
+            DataClass = 'internal'
+            Title = $Title
+            Basis = $Basis
+            ProposedChange = $ProposedChange
+            DuplicateCheck = $DuplicateCheck
+            ReviewDue = $ReviewDue
+            WriteIntent = $WriteIntent
+            AuthorityRef = $AuthorityRef
+        }
+        if ($Type -ceq 'method') {
+            $generatorArguments.MethodKind = $MethodKind
+            $generatorArguments.MethodSummary = $MethodSummary
+            $generatorArguments.MethodAppliesTo = $MethodAppliesTo
+        }
+        & (Join-Path $PSScriptRoot 'new-knowledge-candidate.ps1') @generatorArguments | Out-Null
     }
     catch {
         $rejected = $true
@@ -4703,7 +5017,7 @@ function Assert-GeneratorCliRejectIsRedacted {
         [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $candidateDirectory = Join-Path $FixtureRoot 'knowledge\candidates'
+    $candidateDirectory = [System.IO.Path]::Combine($FixtureRoot, 'knowledge', 'candidates')
     $beforeCandidates = @(Get-ChildItem -LiteralPath $candidateDirectory -Recurse -File -Filter 'KC-*.md' -Force).Count
     $hostPath = Get-TrustedCurrentPowerShellHostPath
     if ($null -eq $hostPath) {
@@ -4754,11 +5068,13 @@ function Assert-GeneratorCliRejectIsRedacted {
 }
 
 function Invoke-SelfTests {
-    $temporaryBase = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) ('knowledge-selftest-' + [guid]::NewGuid().ToString('N'))))
-    $expectedPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([char[]]'\/') +
+    $physicalTemp = & $script:mppGetSystemTempRoot
+    $temporaryBase = [System.IO.Path]::GetFullPath((Join-Path $physicalTemp ('knowledge-selftest-' + [guid]::NewGuid().ToString('N'))))
+    $expectedPrefix = $physicalTemp +
         [System.IO.Path]::DirectorySeparatorChar +
         'knowledge-selftest-'
-    if (-not $temporaryBase.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $temporaryComparison = & $script:mppGetPathComparison -Path $physicalTemp
+    if (-not $temporaryBase.StartsWith($expectedPrefix, $temporaryComparison)) {
         throw "Небезопасный self-test path: $temporaryBase"
     }
 
@@ -4838,10 +5154,15 @@ knowledge_capture_mode: report-only
         Write-FixtureFile -Base $temporaryBase -Relative 'knowledge/candidates/TEMPLATE.md' -Content "# Template`n"
         Write-FixtureFile -Base $temporaryBase -Relative 'knowledge/candidates/2026/KC-20260730-120000-deadbeef.md' -Content (Get-FixtureCandidate)
         Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/INDEX.md' -Content "# Local`n"
+        $intentCatalogSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'mastery/INTENTS.json'
+        Write-FixtureFile `
+            -Base $temporaryBase `
+            -Relative 'mastery/INTENTS.json' `
+            -Content ([System.IO.File]::ReadAllText($intentCatalogSource, $utf8Strict))
         Write-FixtureFile -Base $temporaryBase -Relative 'mastery/researcher/profile.md' -Content "# Profile`n`n## Method`n`nSynthetic baseline method.`n"
-        $sourceAssetRoot = Join-Path (Split-Path -Parent $PSScriptRoot) '.agents\skills\startup-researcher\assets\run-template'
-        $fixtureAssetRoot = Join-Path $temporaryBase '.agents\skills\startup-researcher\assets\run-template'
-        $fixtureRunRoot = Join-Path $temporaryBase 'research\runs\2026-07-30-test'
+        $sourceAssetRoot = Join-Path (Split-Path -Parent $PSScriptRoot) '.agents/skills/startup-researcher/assets/run-template'
+        $fixtureAssetRoot = Join-Path $temporaryBase '.agents/skills/startup-researcher/assets/run-template'
+        $fixtureRunRoot = Join-Path $temporaryBase 'research/runs/2026-07-30-test'
         New-Item -ItemType Directory -Path $fixtureAssetRoot -Force | Out-Null
         New-Item -ItemType Directory -Path $fixtureRunRoot -Force | Out-Null
         foreach ($assetName in @('brief.md', 'queries.md', 'evidence.jsonl', 'candidates.md', 'red-team.md', 'decision.md')) {
@@ -4862,7 +5183,7 @@ knowledge_capture_mode: report-only
         $httpsEvidenceRow = Get-FixtureEvidenceRow
         Write-FixtureFile -Base $temporaryBase -Relative 'research/runs/2026-07-30-test/evidence.jsonl' -Content (($httpsEvidenceRow | ConvertTo-Json -Compress) + "`n")
         Write-FixtureFile -Base $temporaryBase -Relative 'research/runs/2026-07-30-test/decision.md' -Content (Get-FixtureDecision)
-        $rawTemplatePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'inbox\raw\TEMPLATE.md'
+        $rawTemplatePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'inbox/raw/TEMPLATE.md'
         $safeRaw = [System.IO.File]::ReadAllText($rawTemplatePath, $utf8Strict).
             Replace('id: raw-YYYYMMDD-HHmm-slug', 'id: raw-20260730-1159-safe').
             Replace('captured_at: YYYY-MM-DDTHH:mm:ss+00:00', "captured_at: '2026-07-30T11:59:00+04:00'").
@@ -4884,7 +5205,7 @@ knowledge_capture_mode: report-only
         $reparseRoot = Join-Path $temporaryBase 'reparse-root'
         New-Item -ItemType Directory -Path $reparseTarget | Out-Null
         try {
-            New-Item -ItemType Junction -Path $reparseRoot -Target $reparseTarget | Out-Null
+            New-FixtureDirectoryLink -Path $reparseRoot -Target $reparseTarget | Out-Null
             $reparseVerification = Invoke-KnowledgeVerification $reparseRoot
             Assert-SelfTestIssueSet -Result $reparseVerification -AllowedPatterns @(
                 '^Корень репозитория.*reparse point'
@@ -4928,7 +5249,7 @@ knowledge_capture_mode: report-only
         $valid = Invoke-KnowledgeVerification $temporaryBase
         Assert-SelfTestIssueSet -Result $valid -AllowedPatterns @() -Name 'valid candidate, dynamic collections, project contract and template-derived RAW'
         Remove-Item `
-            -LiteralPath (Join-Path $temporaryBase 'research\runs\2026-07-30-test\decision.md') `
+            -LiteralPath (Join-Path $temporaryBase 'research/runs/2026-07-30-test/decision.md') `
             -Force
         $missingResearchDecision = Invoke-KnowledgeVerification $temporaryBase
         Assert-SelfTestIssueSet -Result $missingResearchDecision -AllowedPatterns @(
@@ -5198,7 +5519,7 @@ Evidence: evidence:SRC-001
             -AllowedPatterns @() `
             -Name 'research candidate may cite additional evidence from another run without joining its decision'
         Remove-Item `
-            -LiteralPath (Join-Path $temporaryBase 'research\runs\other') `
+            -LiteralPath (Join-Path $temporaryBase 'research/runs/other') `
             -Recurse `
             -Force
         Write-FixtureFile -Base $temporaryBase -Relative $researchCandidatePath -Content $researchCandidate
@@ -5433,7 +5754,7 @@ Evidence: evidence:SRC-001
 
         foreach ($entry in $additionalResearchCandidates) {
             Remove-Item `
-                -LiteralPath (Join-Path $temporaryBase "knowledge\candidates\2026\$($entry.Id).md") `
+                -LiteralPath (Join-Path $temporaryBase "knowledge/candidates/2026/$($entry.Id).md") `
                 -Force
         }
         Write-FixtureFile -Base $temporaryBase -Relative $researchCandidatePath -Content (Get-FixtureCandidate)
@@ -5638,7 +5959,7 @@ Evidence: evidence:SRC-001
         Assert-SelfTest -Condition ($secretFindings.Count -eq 0) -Name 'expanded credential signatures are detected heuristically'
 
         $creatorPath = Join-Path $PSScriptRoot 'new-knowledge-candidate.ps1'
-        $candidateDirectory = Join-Path $temporaryBase 'knowledge\candidates'
+        $candidateDirectory = [System.IO.Path]::Combine($temporaryBase, 'knowledge', 'candidates')
         $positiveGeneratorPreflight = Invoke-KnowledgeVerification $temporaryBase
         Assert-SelfTestIssueSet `
             -Result $positiveGeneratorPreflight `
@@ -5683,7 +6004,7 @@ Evidence: evidence:SRC-001
             -ReviewDue '2099-12-31' `
             -WriteIntent explicit-promotion `
             -AuthorityRef user-request:selftest-generator-positive
-        $positiveCreatorPath = Join-Path $temporaryBase ([string]$positiveCreatorResult.path).Replace('/', '\')
+        $positiveCreatorPath = Join-Path $temporaryBase ([string]$positiveCreatorResult.path)
         Assert-SelfTest -Condition (
             [string]$positiveCreatorResult.state -ceq 'ready' -and
             (Test-Path -LiteralPath $positiveCreatorPath -PathType Leaf)
@@ -5948,7 +6269,7 @@ Evidence: evidence:SRC-001
                 $_ -match [regex]::Escape($candidateMetadataSentinel)
             }).Count -eq 0
         ) -Name 'duplicate invalid candidate ID diagnostics omit sentinel'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase $duplicateInvalidCandidatePath.Replace('/', '\')) -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase $duplicateInvalidCandidatePath) -Force
         Write-FixtureFile -Base $temporaryBase -Relative $fixtureCandidatePath -Content $baseCandidateContent
 
         $validExplicitMethodCandidate = Get-FixtureCandidate `
@@ -6188,7 +6509,7 @@ Evidence: evidence:SRC-001
         Assert-SelfTestIssueSet -Result $orphan -AllowedPatterns @(
             '^Orphan canonical Markdown: docs/orphan\.md$'
         ) -Name 'orphan canonical Markdown'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs\orphan.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs/orphan.md') -Force
 
         $unsafeRaw = @"
 ---
@@ -6217,7 +6538,7 @@ related: []
         Assert-SelfTestIssueSet -Result $rawResult -AllowedPatterns @(
             'inbox/raw/2026-07-30_12-00_fixture\.md: data-safety finding in RAW \(email-or-pii\)'
         ) -Name 'unsafe RAW PII'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox\raw\2026-07-30_12-00_fixture.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox/raw/2026-07-30_12-00_fixture.md') -Force
 
         $rawMetadataSentinel = 'RawMetadataLeakSentinel123456'
 $invalidRawMetadata = @"
@@ -6262,7 +6583,7 @@ related: []
         Assert-SelfTestIssueSet -Result $rawScalarSequenceResult -AllowedPatterns @(
             "RAW поле 'storage_basis' должно быть YAML scalar"
         ) -Name 'RAW required scalar field rejects one-item sequence'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox\raw\2026-07-30_12-01_metadata.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox/raw/2026-07-30_12-01_metadata.md') -Force
 
         Write-FixtureFile `
             -Base $temporaryBase `
@@ -6272,7 +6593,7 @@ related: []
         Assert-SelfTestIssueSet -Result $inboxArchiveRecord -AllowedPatterns @(
             '^Физическая RAW archive record запрещена: inbox/raw/archive/secret\.md$'
         ) -Name 'inbox physical RAW archive record is rejected without reading content'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox\raw\archive\secret.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox/raw/archive/secret.md') -Force
 
         Write-FixtureFile `
             -Base $temporaryBase `
@@ -6282,7 +6603,7 @@ related: []
         Assert-SelfTestIssueSet -Result $businessArchiveRecord -AllowedPatterns @(
             '^Физическая RAW archive record запрещена: business/raw/archive/secret\.md$'
         ) -Name 'business physical RAW archive record is rejected without reading content'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'business\raw\archive\secret.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'business/raw/archive/secret.md') -Force
 
         Write-FixtureFile `
             -Base $temporaryBase `
@@ -6292,7 +6613,7 @@ related: []
         Assert-SelfTestIssueSet -Result $inboxNonMarkdownRaw -AllowedPatterns @(
             '^Недопустимый non-Markdown RAW file: inbox/raw/secret\.txt$'
         ) -Name 'inbox non-Markdown RAW file is rejected without reading content'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox\raw\secret.txt') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'inbox/raw/secret.txt') -Force
 
         Write-FixtureFile `
             -Base $temporaryBase `
@@ -6302,15 +6623,15 @@ related: []
         Assert-SelfTestIssueSet -Result $businessNonMarkdownRaw -AllowedPatterns @(
             '^Недопустимый non-Markdown RAW file: business/raw/secret\.bin$'
         ) -Name 'business arbitrary-extension RAW file is rejected without reading content'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'business\raw\secret.bin') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'business/raw/secret.bin') -Force
 
-        $boundedFile = Join-Path $temporaryBase 'docs\bounded.md'
+        $boundedFile = Join-Path $temporaryBase 'docs/bounded.md'
         Write-FixtureFile -Base $temporaryBase -Relative 'docs/bounded.md' -Content '0123456789abcdef'
         $savedTextFileBytes = $maxTextFileBytes
         try {
             Set-Variable -Name maxTextFileBytes -Scope Script -Value 8
             $script:currentIssues = [System.Collections.Generic.List[string]]::new()
-            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
             $script:textReadCorpusBytes = [long]0
             Read-BoundedUtf8Text -FilePath $boundedFile -Context 'bounded file fixture' | Out-Null
             $boundedFileResult = [pscustomobject]@{ Issues = @($script:currentIssues) }
@@ -6327,10 +6648,10 @@ related: []
         try {
             Set-Variable -Name maxTextFiles -Scope Script -Value 1
             $script:currentIssues = [System.Collections.Generic.List[string]]::new()
-            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
             $script:textReadCorpusBytes = [long]0
             Read-BoundedUtf8Text -FilePath $boundedFile -Context 'bounded count first' | Out-Null
-            Read-BoundedUtf8Text -FilePath (Join-Path $temporaryBase 'docs\bounded-two.md') -Context 'bounded count second' | Out-Null
+            Read-BoundedUtf8Text -FilePath (Join-Path $temporaryBase 'docs/bounded-two.md') -Context 'bounded count second' | Out-Null
             $boundedCountResult = [pscustomobject]@{ Issues = @($script:currentIssues) }
             Assert-SelfTestIssueSet -Result $boundedCountResult -AllowedPatterns @(
                 '^Text corpus превышает file-count limit 1\.$'
@@ -6344,10 +6665,10 @@ related: []
         try {
             Set-Variable -Name maxTextCorpusBytes -Scope Script -Value 20
             $script:currentIssues = [System.Collections.Generic.List[string]]::new()
-            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
             $script:textReadCorpusBytes = [long]0
             Read-BoundedUtf8Text -FilePath $boundedFile -Context 'bounded corpus first' | Out-Null
-            Read-BoundedUtf8Text -FilePath (Join-Path $temporaryBase 'docs\bounded-two.md') -Context 'bounded corpus second' | Out-Null
+            Read-BoundedUtf8Text -FilePath (Join-Path $temporaryBase 'docs/bounded-two.md') -Context 'bounded corpus second' | Out-Null
             $boundedCorpusResult = [pscustomobject]@{ Issues = @($script:currentIssues) }
             Assert-SelfTestIssueSet -Result $boundedCorpusResult -AllowedPatterns @(
                 '^Text corpus превышает byte limit 20\.$'
@@ -6357,16 +6678,16 @@ related: []
             Set-Variable -Name maxTextCorpusBytes -Scope Script -Value $savedTextCorpusBytes
         }
         Remove-Item -LiteralPath $boundedFile -Force
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs\bounded-two.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs/bounded-two.md') -Force
 
         $childTarget = Join-Path $temporaryBase 'child-reparse-target'
-        $childJunction = Join-Path $temporaryBase 'docs\child-reparse'
+        $childJunction = Join-Path $temporaryBase 'docs/child-reparse'
         New-Item -ItemType Directory -Path $childTarget | Out-Null
         Write-FixtureFile -Base $childTarget -Relative 'source.md' -Content "# Child source`n"
         try {
-            New-Item -ItemType Junction -Path $childJunction -Target $childTarget | Out-Null
+            New-FixtureDirectoryLink -Path $childJunction -Target $childTarget | Out-Null
             $script:currentIssues = [System.Collections.Generic.List[string]]::new()
-            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $script:textReadPaths = [System.Collections.Generic.HashSet[string]]::new($script:pathComparer)
             $script:textReadCorpusBytes = [long]0
             Read-BoundedUtf8Text `
                 -FilePath (Join-Path $childJunction 'source.md') `
@@ -6414,6 +6735,7 @@ related: []
                 'docs/source.md',
                 'docs/target.md',
                 'knowledge/candidates/TEMPLATE.md',
+                'mastery/INTENTS.json',
                 'mastery/local/INDEX.md',
                 'mastery/researcher/profile.md'
             )
@@ -6454,7 +6776,7 @@ related: []
         Assert-SelfTestIssueSet -Result $baselineDrift -AllowedPatterns @(
             '^Mastery baseline drift: mastery/researcher/profile\.md '
         ) -Name 'mastery baseline hash drift'
-        $fixtureManifest.mastery_baseline.files[0].sha256 = Get-Sha256 (Join-Path $temporaryBase 'mastery\researcher\profile.md')
+        $fixtureManifest.mastery_baseline.files[0].sha256 = Get-Sha256 (Join-Path $temporaryBase 'mastery/researcher/profile.md')
         Write-FixtureFile -Base $temporaryBase -Relative '.template-manifest.json' -Content ($fixtureManifest | ConvertTo-Json -Depth 8)
 
         $templateProject = $project.Replace('repository_kind: generated-project', 'repository_kind: template-source').Replace('project_status: active', 'project_status: template').Replace('knowledge_capture_mode: report-only', 'knowledge_capture_mode: disabled')
@@ -6515,38 +6837,77 @@ related: []
         Write-FixtureFile -Base $temporaryBase -Relative 'INDEX.md' -Content $indexWithProfile
         $fixtureManifest.source_only_paths = @()
         Write-FixtureFile -Base $temporaryBase -Relative '.template-manifest.json' -Content ($fixtureManifest | ConvertTo-Json -Depth 8)
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs\decisions\source-only-adr.md') -Force
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'plans\dynamic-plan.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'docs/decisions/source-only-adr.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'plans/dynamic-plan.md') -Force
 
+        $localMethodCandidateId = 'KC-20260730-120002-acde1234'
+        $localMethodCandidateRelative = "knowledge/candidates/2026/$localMethodCandidateId.md"
+        $localMethodCandidate = Get-FixtureCandidate `
+            -Id $localMethodCandidateId `
+            -State applied `
+            -Type method `
+            -Domain mastery `
+            -ClaimKey method.validated-method `
+            -TargetRef 'mastery/local/INDEX.md#зарегистрированные-расширения' `
+            -SourceRef 'docs/source.md' `
+            -CaptureBasis explicit-user-capture `
+            -AuthorityRef user-request:selftest-local-method `
+            -AppliedAt "'2026-07-30T12:20:00+04:00'" `
+            -MethodKind checklist `
+            -MethodSummary 'Повторяемый fixture-метод.' `
+            -MethodAppliesTo planning
+        Write-FixtureFile -Base $temporaryBase -Relative $localMethodCandidateRelative -Content $localMethodCandidate
+        Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/INDEX.md' -Content @"
+# Local
+
+## Зарегистрированные расширения
+
+[Candidate](../../$localMethodCandidateRelative)
+"@
         $localExtension = @"
 ---
+mastery_contract_version: 2
 method_id: validated-method
+method_kind: checklist
+summary: Повторяемый fixture-метод.
 owner_scope: project
 applies_to:
-  - niche-discovery
+  - planning
 status: active
 source_refs:
-  - docs/source.md
+  - $localMethodCandidateRelative
 verified_at: '2026-07-30'
 review_due: '2099-12-31'
 supersedes: null
 ---
 
 # Local extension
+
+## Provenance
+
+Applied candidate указан во frontmatter source_refs.
 "@
-        Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/unregistered.md' -Content $localExtension
+        Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/validated-method.md' -Content $localExtension
         $unregisteredLocal = Invoke-KnowledgeVerification $temporaryBase
         Assert-SelfTestIssueSet -Result $unregisteredLocal -AllowedPatterns @(
-            '^Незарегистрированное mastery/local расширение: mastery/local/unregistered\.md$',
-            '^Orphan canonical Markdown: mastery/local/unregistered\.md$'
+            '^Незарегистрированное mastery/local расширение: mastery/local/validated-method\.md$',
+            '^Orphan canonical Markdown: mastery/local/validated-method\.md$'
         ) -Name 'unregistered local mastery'
-        Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/INDEX.md' -Content "# Local`n`n[Validated method](unregistered.md)`n"
+        Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/INDEX.md' -Content @"
+# Local
+
+## Зарегистрированные расширения
+
+[Validated method](validated-method.md)
+[Candidate](../../$localMethodCandidateRelative)
+"@
         $registeredLocal = Invoke-KnowledgeVerification $temporaryBase
         Assert-SelfTestIssueSet -Result $registeredLocal -AllowedPatterns @() -Name 'registered valid local mastery'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'mastery\local\unregistered.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'mastery/local/validated-method.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase $localMethodCandidateRelative) -Force
         Write-FixtureFile -Base $temporaryBase -Relative 'mastery/local/INDEX.md' -Content "# Local`n"
         Remove-Item -LiteralPath (Join-Path $temporaryBase '.template-manifest.json') -Force
-        Remove-Item -LiteralPath (Join-Path $temporaryBase 'mastery\researcher\profile.md') -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase 'mastery/researcher/profile.md') -Force
 
         $duplicateId = 'KC-20260730-120001-cafebabe'
         $duplicateContent = (Get-FixtureCandidate -Id 'KC-20260730-120000-deadbeef').Replace('fixture-claim', 'fixture-claim-two')
@@ -6556,7 +6917,7 @@ supersedes: null
             '^Duplicate candidate ID:',
             "id 'KC-20260730-120000-deadbeef' не совпадает с именем файла 'KC-20260730-120001-cafebabe'"
         ) -Name 'duplicate candidate ID'
-        Remove-Item -LiteralPath (Join-Path $temporaryBase "knowledge\candidates\2026\$duplicateId.md") -Force
+        Remove-Item -LiteralPath (Join-Path $temporaryBase "knowledge/candidates/2026/$duplicateId.md") -Force
 
         $applied = Get-FixtureCandidate -State 'applied' -AuthorityRef 'user-request:selftest-current' -AppliedAt "'2026-07-30T12:10:00+04:00'"
         Write-FixtureFile -Base $temporaryBase -Relative 'knowledge/candidates/2026/KC-20260730-120000-deadbeef.md' -Content $applied
@@ -6758,7 +7119,7 @@ supersedes: null
     finally {
         if (Test-Path -LiteralPath $temporaryBase -PathType Container) {
             $resolvedTemporary = (Resolve-Path -LiteralPath $temporaryBase).Path
-            if (-not $resolvedTemporary.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $resolvedTemporary.StartsWith($expectedPrefix, $temporaryComparison)) {
                 throw "Отказ от очистки небезопасного self-test path: $resolvedTemporary"
             }
             Remove-Item -LiteralPath $resolvedTemporary -Recurse -Force
